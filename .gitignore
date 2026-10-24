@@ -5,3 +5,4 @@ sessions/
 test-output/
 .test-output/
 *.tmp
+.pytest_cache/
