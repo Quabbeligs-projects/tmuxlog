@@ -1,6 +1,6 @@
 """tmuxlog command line.
 
-Phase 1 commands: init-script, events, status, export --format jsonl.
+Commands: init-script, events, status, export --format jsonl, capture (internal).
 """
 
 import argparse
@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from tmuxlog import __version__, config, journal, paths
+from tmuxlog import __version__, capture, config, journal, paths
 
 
 def _pane_dirs(session: Path) -> list[Path]:
@@ -79,6 +79,10 @@ def cmd_events(args, cfg) -> int:
     return 0
 
 
+def cmd_capture(args, cfg) -> int:
+    return capture.run(Path(args.pane_dir))
+
+
 def cmd_status(args, cfg) -> int:
     session = _resolve_session(cfg, args.session)
     panes = _pane_dirs(session)
@@ -123,6 +127,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("target", help="pane directory or hooks.rec file")
     s.add_argument("-o", "--output", help="output path, or - for stdout (default: <pane>/events.jsonl)")
     s.set_defaults(func=cmd_events)
+
+    s = sub.add_parser("capture", help="(internal) record a pane; run by tmux pipe-pane -O")
+    s.add_argument("--pane-dir", required=True)
+    s.set_defaults(func=cmd_capture)
 
     s = sub.add_parser("status", help="show panes, command counts and open commands")
     s.add_argument("--session", help="session name (default: most recently modified)")
