@@ -110,10 +110,9 @@ def test_e2e_race_ordering_and_atomicity():
         assert _wait(lambda: all((Path(p["pane_dir"]) / "raw.bin").exists() for p in res["panes"]))
         pdir = {p["pane_id"]: Path(p["pane_dir"]) for p in res["panes"]}
 
-        # warm-up Enter so each shell arms at its next prompt (pointer now exists)
-        for p in (p0, p1):
-            tmux("send-keys", "-t", p, "", "Enter")
-        assert _wait(lambda: all((pdir[p] / "hooks.rec").stat().st_size > 0 for p in (p0, p1)))
+        # No warm-up Enter: the shells drew their first prompt before
+        # start_session created the arm pointers, so the first real command
+        # below must arm its shell at preexec (I record before the first S).
 
         # THE RACE: p0 starts a long command first; p1 a short one just after.
         # p1 finishes first (output arrives first); p0 started first.
@@ -121,9 +120,12 @@ def test_e2e_race_ordering_and_atomicity():
         time.sleep(0.1)
         tmux("send-keys", "-t", p1, "echo SHORTFAST", "Enter")
 
-        # wait for both commands to complete (warm-up Enter was empty -> no cmd;
-        # each pane has exactly the one real command's cmd_end)
+        # wait for both commands to complete (each pane has exactly the one real
+        # command's cmd_end)
         assert _wait(lambda: _done_count(pdir[p0]) >= 1 and _done_count(pdir[p1]) >= 1, timeout=20)
+        for p in (p0, p1):   # preexec arm: init precedes the first cmd_start
+            kinds = [e["event"] for e in _events(pdir[p])]
+            assert kinds[:2] == ["init", "cmd_start"], kinds
 
         stop_session("sess", cfg, tmux=tm)
         assert _wait(lambda: all((pdir[p] / "sealed").exists() for p in (p0, p1)), timeout=10)

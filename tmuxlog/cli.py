@@ -7,7 +7,9 @@ import argparse
 import io
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 from tmuxlog import __version__, config, journal, paths
@@ -79,12 +81,41 @@ def cmd_events(args, cfg) -> int:
     return 0
 
 
+def _tmux_pipes() -> tuple[int | None, dict[str, bool]]:
+    """(server pid, {pane_id: piped}) of the default tmux server, or (None, {})."""
+    try:
+        pid = subprocess.run(["tmux", "display-message", "-p", "#{pid}"],
+                             capture_output=True, text=True, timeout=5)
+        panes = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_id} #{pane_pipe}"],
+                               capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, {}
+    if pid.returncode or panes.returncode:
+        return None, {}
+    piped = {}
+    for line in panes.stdout.splitlines():
+        pane_id, _, flag = line.partition(" ")
+        piped[pane_id] = flag == "1"
+    return int(pid.stdout.strip()), piped
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def cmd_status(args, cfg) -> int:
+    from tmuxlog import capture
     session = _resolve_session(cfg, args.session)
     panes = _pane_dirs(session)
+    sj = _read_json(session / "session.json")
     print(f"session {session.name}: {session}")
+    print(f"  boundary: {sj.get('boundary', 'unknown')}")
     if not panes:
         print("  no panes with a hook journal yet")
+    server_pid, piped = _tmux_pipes()
     for pane in panes:
         events, warnings = journal.events_from_file(pane / "hooks.rec")
         shells = sum(ev["event"] == "init" for ev in events)
@@ -94,6 +125,25 @@ def cmd_status(args, cfg) -> int:
         if warnings:
             line += f", {len(warnings)} warning(s)"
         print(line)
+
+        meta = _read_json(pane / "meta.json")
+        sealed = _read_json(pane / "sealed") if (pane / "sealed").exists() else None
+        if sealed:
+            pipe = f"sealed ({sealed.get('reason', '?')})"
+        elif not meta or server_pid is None:
+            pipe = "unknown"
+        elif meta.get("server_pid") != server_pid:
+            pipe = "server gone"
+        else:
+            pipe = "alive" if piped.get(meta.get("pane_id")) else "not piped"
+        raw_bytes = (sealed or {}).get("raw_bytes")
+        if raw_bytes is None:
+            raw_bytes = (pane / "raw.bin").stat().st_size if (pane / "raw.bin").exists() else 0
+        gaps = capture.read_gaps(pane)
+        detail = f"    {meta.get('pane_id', '?')}: pipe {pipe}, raw {raw_bytes} bytes, {len(gaps)} gap(s)"
+        if gaps:
+            detail += f" ({sum(g.get('bytes', 0) for g in gaps)} bytes lost or untimed)"
+        print(detail)
         for ev in open_cmds:
             first = ev["cmd"].splitlines()[0] if ev["cmd"] else ""
             print(f"    open: seq {ev['seq']} {first}")
@@ -105,9 +155,32 @@ def cmd_capture(args, cfg) -> int:
     return capture.run(Path(args.pane_dir))
 
 
+def _boundary_for(cfg) -> str:
+    """config `capture.boundary`, or for "auto" the probe result cached per tmux version."""
+    from tmuxlog import probe
+    mode = cfg["capture"].get("boundary", "auto")
+    if mode in ("osc", "sentinel"):
+        return mode
+    version = subprocess.run(["tmux", "-V"], capture_output=True, text=True).stdout.strip()
+    cache = paths.ensure_dir(Path(cfg["paths"]["root"])) / "probe.json"
+    cached = {}
+    if cache.exists():
+        try:
+            cached = json.loads(cache.read_text())
+        except json.JSONDecodeError:
+            cached = {}
+    if version not in cached:
+        result = probe.probe("tmux")
+        cached[version] = {"boundary": result["boundary"], "probed_ns": time.time_ns(),
+                           "osc_passthrough_exact": result.get("osc_passthrough_exact"),
+                           "osc_invisible": result.get("osc_invisible")}
+        paths.write_private_atomic(cache, (json.dumps(cached, indent=2) + "\n").encode())
+    return cached[version]["boundary"]
+
+
 def cmd_start_session(args, cfg) -> int:
     from tmuxlog import session
-    res = session.start_session(args.name, cfg, boundary=args.boundary or "osc")
+    res = session.start_session(args.name, cfg, boundary=args.boundary or _boundary_for(cfg))
     armed = sum(p["status"] == "armed" for p in res["panes"])
     print(f"tmuxlog: session {res['session']} ({res['boundary']}): armed {armed}/"
           f"{len(res['panes'])} pane(s) -> {res['dir']}")

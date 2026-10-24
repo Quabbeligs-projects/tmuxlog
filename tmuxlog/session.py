@@ -84,10 +84,35 @@ class Tmux:
         self.run("set-hook", "-u", "-t", name, hook, check=False)
 
 
+PKG_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _launcher(cfg, exec_: bool = False) -> str:
+    """Shell command prefix that runs tmuxlog from inside tmux (pipe-pane, run-shell).
+
+    tmux runs these with the *server's* environment and cwd, so nothing may
+    depend on the caller's PYTHONPATH, cwd or TMUXLOG_ROOT. The state root is
+    pinned explicitly. By default this interpreter runs the package from where
+    it actually lives (works for bin/tmuxlog in a checkout and for an install);
+    `[capture] cmd` overrides the launcher, e.g. "/usr/local/bin/tmuxlog".
+    With exec_, the shell is replaced (env assignments must precede `exec`).
+    """
+    root = shlex.quote(str(Path((cfg or {}).get("paths", {}).get("root", "~/.tmuxlog")).expanduser()))
+    env = [f"TMUXLOG_ROOT={root}"]
+    override = ((cfg or {}).get("capture", {}).get("cmd") or "").strip()
+    if override:
+        if override.endswith(" capture"):          # accept a full capture command too
+            override = override[: -len(" capture")]
+        cmd = override
+    else:
+        env.append(f"PYTHONPATH={shlex.quote(str(PKG_ROOT))}")
+        cmd = f"{shlex.quote(sys.executable)} -m tmuxlog"
+    return " ".join(env + (["exec"] if exec_ else []) + [cmd])
+
+
 def _capture_cmd(cfg) -> str:
-    """Command pipe-pane runs per pane. Configurable; defaults to this interpreter."""
-    c = (cfg or {}).get("capture", {}).get("cmd")
-    return c or f"{shlex.quote(sys.executable)} -m tmuxlog capture"
+    """Command pipe-pane runs per pane (exec: the capture process is the pipe's child)."""
+    return f"{_launcher(cfg, exec_=True)} capture"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -130,8 +155,23 @@ def arm_pane(pane: dict, session_dir: Path, root: Path, server_pid: int,
         pane_dir = session_dir / "panes" / uid
     paths.ensure_dir(pane_dir)
 
-    meta = {**pane, "pane_uid": pane_dir.name, "server_pid": server_pid,
-            "created_ns": time.time_ns()}
+    # Snapshot for finalize: identity + names at arm time + ordering keys.
+    meta = {
+        "meta_version": 1,
+        "pane_uid": pane_dir.name,
+        "pane_id": pane["pane_id"],
+        "pane_num": int(pane_num),            # numeric tie-break in the master sort
+        "session": pane["session"],
+        "window_index": int(pane["window_index"]),
+        "window_name": pane["window_name"],
+        "pane_index": int(pane["pane_index"]),
+        "pane_title": pane["pane_title"],
+        "pane_pid": int(pane["pane_pid"]),
+        "tty": pane["tty"],
+        "server_pid": server_pid,
+        "created_ns": time.time_ns(),         # preamble ordering
+        "boundary": boundary,
+    }
     if not (pane_dir / "meta.json").exists():
         paths.write_private_atomic(pane_dir / "meta.json", (json.dumps(meta) + "\n").encode())
     # touch a 0600 hooks.rec and write the boundary mode for the hooks
@@ -173,7 +213,7 @@ def start_session(name: str | None, cfg: dict, tmux: Tmux | None = None,
                for p in tmux.list_panes(name)]
 
     # new panes created later arm themselves via these session-scoped hooks
-    self_cmd = f"{_capture_cmd(cfg).rsplit(' -m ', 1)[0]} -m tmuxlog arm-new --session {shlex.quote(name)}"
+    self_cmd = f"{_launcher(cfg)} arm-new --session {shlex.quote(name)}"
     for hook in NEW_PANE_HOOKS:
         tmux.set_hook(name, hook, f"run-shell {shlex.quote(self_cmd)}")
 

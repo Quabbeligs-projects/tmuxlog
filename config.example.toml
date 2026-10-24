@@ -12,6 +12,9 @@ boundary = "auto"
 max_block_bytes = 104857600
 # Output after a command ends is split into orphan blocks at gaps longer than this.
 orphan_gap_ms = 500
+# Launcher tmux uses to run tmuxlog (pipe-pane capture, arm-new hook). Default:
+# this Python running the package from where it is installed. Example:
+# cmd = "/usr/local/bin/tmuxlog"
 # Commands tagged `interactive: true` in block metadata.
 interactive = [
   "ssh", "telnet", "nc", "ncat", "socat", "msfconsole", "evil-winrm",
