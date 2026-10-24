@@ -75,8 +75,7 @@ __tl_rearm() {
     { exec {__tl_tty}>/dev/tty } 2>/dev/null || __tl_tty=-1
     __tl_dir=$dir
     __tl_now
-    printf 'I %s %s %d zsh %s %d\n' $__tl_nonce $__tl_ts $$ $ZSH_VERSION ${SHLVL:-0} \
-        >&$__tl_fd 2>/dev/null || { __tl_fail; return 0 }
+    printf 'I %s %s %d zsh\n' $__tl_nonce $__tl_ts $$ >&$__tl_fd 2>/dev/null || { __tl_fail; return 0 }
     __tl_mark "I;$__tl_nonce"
     return 0
 }
@@ -90,11 +89,11 @@ __tl_preexec() {
     local LC_ALL=C
     (( __tl_fd >= 0 )) || return 0
     __tl_now
-    local cmd=$1 src=typed
-    [[ -n $cmd ]] || { cmd=$3; src=expanded }
+    local cmd=$1
+    [[ -n $cmd ]] || cmd=$3
     (( ++__tl_seq ))
     __tl_open=1
-    printf 'S %d %s %s %d %s %d:%s %d:%s %d:%s %d:%s\n' $__tl_seq $__tl_ts $__tl_nonce ${SHLVL:-0} $src \
+    printf 'S %d %s %s %d %d:%s %d:%s %d:%s %d:%s\n' $__tl_seq $__tl_ts $__tl_nonce ${SHLVL:-0} \
         ${#cmd} "$cmd" ${#PWD} "$PWD" ${#USER} "${USER-}" ${#HOST} "${HOST-}" \
         >&$__tl_fd 2>/dev/null || { __tl_fail; return 0 }
     __tl_mark "C;$__tl_nonce;$__tl_seq"

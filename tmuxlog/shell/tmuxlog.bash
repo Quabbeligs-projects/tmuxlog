@@ -13,11 +13,9 @@ __tl_loaded=1
 __tl_root=${TMUXLOG_ROOT:-$HOME/.tmuxlog}
 __tl_nonce="b$$r$RANDOM$RANDOM"
 __tl_fd=-1 __tl_tty=-1 __tl_dir= __tl_broken= __tl_seq=0 __tl_open=0
-__tl_at_prompt=0 __tl_hnum= __tl_ec=0 __tl_src= __tl_ntrace=0 __tl_ts=0
+__tl_at_prompt=0 __tl_hnum= __tl_ec=0 __tl_ts=0
 __tl_bmark=$'\e]6973;tmuxlog;B;'"$__tl_nonce"$'\a'
 __tl_psmark="\[$__tl_bmark\]"
-# Cap on extra $BASH_COMMAND records per command (loops fire the trap per iteration).
-__tl_max_trace=${TMUXLOG_MAX_TRACE:-32}
 
 # Callers hold `local LC_ALL=C`, so the radix is '.'; stripping every non-digit
 # also makes the parse independent of whatever radix the locale would use.
@@ -77,14 +75,13 @@ __tl_rearm() {
     { exec {__tl_tty}>/dev/tty; } 2>/dev/null || __tl_tty=-1
     __tl_dir=$dir
     __tl_now
-    printf 'I %s %s %d bash %s %d\n' "$__tl_nonce" "$__tl_ts" "$$" "${BASH_VERSION// /_}" "${SHLVL:-0}" \
-        >&"$__tl_fd" 2>/dev/null || { __tl_fail; return 0; }
+    printf 'I %s %s %d bash\n' "$__tl_nonce" "$__tl_ts" "$$" >&"$__tl_fd" 2>/dev/null || { __tl_fail; return 0; }
     __tl_mark "I;$__tl_nonce"
     return 0
 }
 
 __tl_preexec() {
-    local LC_ALL=C cmd= src=history
+    local LC_ALL=C cmd=
     __tl_now
     # HISTCMD in the DEBUG trap equals its value at the previous prompt only if
     # this line was saved to history (not dropped by ignorespace/ignoredups or
@@ -97,12 +94,13 @@ __tl_preexec() {
         cmd=${cmd# }
         cmd=${cmd%$'\n'}
     fi
-    # Primary, always-available path: the simple command about to run. Later
-    # simple commands of the same line follow as T records (see __tl_debug).
-    [[ -n $cmd ]] || cmd=$BASH_COMMAND src=trace
+    # Primary, always-available path: the command about to run. For a line
+    # that history did not keep, this is only its first simple command
+    # (`a | b` gives `a`); heredoc bodies are included.
+    [[ -n $cmd ]] || cmd=$BASH_COMMAND
     (( ++__tl_seq ))
-    __tl_open=1 __tl_ntrace=0 __tl_src=$src
-    printf 'S %d %s %s %d %s %d:%s %d:%s %d:%s %d:%s\n' "$__tl_seq" "$__tl_ts" "$__tl_nonce" "${SHLVL:-0}" "$src" \
+    __tl_open=1
+    printf 'S %d %s %s %d %d:%s %d:%s %d:%s %d:%s\n' "$__tl_seq" "$__tl_ts" "$__tl_nonce" "${SHLVL:-0}" \
         "${#cmd}" "$cmd" "${#PWD}" "$PWD" "${#USER}" "${USER-}" "${#HOSTNAME}" "${HOSTNAME-}" \
         >&"$__tl_fd" 2>/dev/null || { __tl_fail; return 0; }
     __tl_mark "C;$__tl_nonce;$__tl_seq"
@@ -119,10 +117,6 @@ __tl_debug() {
     if (( __tl_at_prompt )); then
         __tl_at_prompt=0
         __tl_preexec
-    elif (( __tl_open && __tl_ntrace < __tl_max_trace )) && [[ $__tl_src == trace ]]; then
-        (( ++__tl_ntrace ))
-        local LC_ALL=C c=$BASH_COMMAND
-        printf 'T %d %s %d:%s\n' "$__tl_seq" "$__tl_nonce" "${#c}" "$c" >&"$__tl_fd" 2>/dev/null || __tl_fail
     fi
     return 0
 }

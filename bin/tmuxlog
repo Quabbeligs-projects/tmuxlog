@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""Run tmuxlog from a checkout: symlink this file onto your PATH."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from tmuxlog.cli import main  # noqa: E402
+
+raise SystemExit(main())

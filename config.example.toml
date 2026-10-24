@@ -1,0 +1,39 @@
+# tmuxlog configuration. Copy to ~/.tmuxlog/config.toml; every key is optional
+# and the values below are the built-in defaults.
+
+[paths]
+# All state lives here (dirs 0700, files 0600). Logs contain secrets verbatim.
+root = "~/.tmuxlog"
+
+[capture]
+# Boundary marks: "auto" (OSC self-test, sentinel fallback), "osc", "sentinel".
+boundary = "auto"
+# Per-block cap for master.log / master.clean.log only; raw.bin is never truncated.
+max_block_bytes = 104857600
+# Output after a command ends is split into orphan blocks at gaps longer than this.
+orphan_gap_ms = 500
+# Commands tagged `interactive: true` in block metadata.
+interactive = [
+  "ssh", "telnet", "nc", "ncat", "socat", "msfconsole", "evil-winrm",
+  "mysql", "psql", "sqlplus", "smbclient", "ftp", "python", "python3",
+  "ipython", "vim", "nvim", "vi", "nano", "less", "man", "top", "htop",
+  "watch", "tmux", "screen", "bash", "zsh", "sh",
+]
+
+[tmux]
+# tmux 3.x has no pane-created hook; these cover every way a pane appears.
+hooks = ["after-new-session", "after-new-window", "after-split-window", "after-respawn-pane"]
+
+[ollama]
+# Only loopback endpoints are accepted.
+endpoint = "http://127.0.0.1:11434"
+model = "mistral"
+num_ctx = 32768
+prompt_reserve_tokens = 2048
+response_reserve_tokens = 4096
+# Conservative bytes-per-token estimate used for chunk packing.
+bytes_per_token = 3.0
+retries = 3
+# Collapse carriage-return/backspace overwrites (progress bars) in the text fed
+# to `analyze` only. master.clean.log is never collapsed.
+collapse_cr = true

@@ -39,7 +39,7 @@ No central daemon. Each pane has exactly two writers on disjoint files; everythi
 
 ## 4. Data model
 **Hook record** (shell side, length-prefixed so arbitrary bytes incl. newlines need no escaping/forks):
-`S <seq> <ts_ns> <nonce> <shlvl> <len>:<cmd> <len>:<cwd> <len>:<user> <len>:<host>\n` and `E <seq> <ts_ns> <nonce> <exit>\n`, plus `I <nonce> <ts_ns> <pid> <shell>` at init. Lengths in bytes (`LC_ALL=C ${#v}`).
+`S <seq> <ts_ns> <nonce> <shlvl> <len>:<cmd> <len>:<cwd> <len>:<user> <len>:<host>\n` and `E <seq> <ts_ns> <nonce> <exit>\n`, plus `I <nonce> <ts_ns> <pid> <shell>\n` at arm time. Lengths in bytes (`LC_ALL=C ${#v}`). Parsed by `tmuxlog/journal.py`.
 **Block** (assembled by finalize): `{block_id, kind: command|preamble|orphan, pane_uid, pane_id, session, window_index/name, pane_index/title, start_ns, end_ns, exit_code, status: complete|interrupted|still_running|unterminated, cmd, cwd, user, host, shell, depth, raw_offsets:[a,b], bytes_total, bytes_emitted, truncated, echo_dedup: matched|kept, sha256_raw, sha256_clean}`.
 **events.jsonl**: `cmd_start`, `cmd_end` per hook record, then one `block` record per block (above), in final order.
 
