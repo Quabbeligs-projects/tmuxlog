@@ -102,11 +102,118 @@ def probe(tmux: str = "tmux") -> dict:
     return result
 
 
+def _server(tmux: str, tag: str) -> list[str]:
+    return [tmux, "-L", f"tmuxlog-probe-{tag}-{os.getpid()}", "-f", "/dev/null"]
+
+
+def _sh() -> list[str]:
+    return ["env", "-i", f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}", "PS1=$ ", "sh"]
+
+
+def probe_session_hooks(tmux: str = "tmux") -> dict:
+    """Do session-scoped after-* hooks fire only for their session, with the new pane's id?"""
+    base = _server(tmux, "hooks")
+    tmp = Path(tempfile.mkdtemp(prefix="tmuxlog-probe-"))
+    log = tmp / "hooks.log"
+
+    def t(*args, check=True):
+        return subprocess.run(base + list(args), capture_output=True, text=True, check=check)
+
+    def hook_cmd(tag):
+        return f"run-shell -b \"echo {tag} #{{session_name}} #{{pane_id}} >> '{log}'\""
+
+    def lines():
+        return log.read_text().split() if log.exists() else []
+
+    res = {}
+    try:
+        t("new-session", "-d", "-s", "a", *_sh())
+        t("new-session", "-d", "-s", "b", *_sh())
+        t("set-hook", "-t", "a", "after-split-window", hook_cmd("split"))
+        t("set-hook", "-t", "a", "after-new-window", hook_cmd("neww"))
+        t("set-hook", "-g", "after-new-session", hook_cmd("news"))
+
+        new = t("split-window", "-P", "-F", "#{pane_id}", "-t", "a", *_sh()).stdout.strip()
+        _wait(lambda: "split" in lines(), 3.0)
+        res["split_in_scope_fires_with_new_pane_id"] = lines()[:3] == ["split", "a", new]
+
+        t("split-window", "-t", "b", *_sh())
+        new = t("new-window", "-P", "-F", "#{pane_id}", "-t", "a", *_sh()).stdout.strip()
+        _wait(lambda: "neww" in lines(), 3.0)
+        got = lines()
+        res["split_other_session_does_not_fire"] = got.count("split") == 1
+        res["new_window_in_scope_fires_with_new_pane_id"] = got[3:6] == ["neww", "a", new]
+
+        new = t("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", "c", *_sh()).stdout.strip()
+        _wait(lambda: "news" in lines(), 3.0)
+        got = lines()
+        res["global_new_session_fires"] = got[-3:] == ["news", "c", new]
+        res["session_hook_lines"] = log.read_text().splitlines() if log.exists() else []
+    finally:
+        subprocess.run(base + ["kill-server"], capture_output=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return res
+
+
+# Printable fallback mark: text, then cursor-left over exactly its own width and
+# erase-to-end-of-line, so it is never left on screen (and is safe at the end of
+# PS1, where a carriage return would also erase the prompt).
+SENTINEL = b"@@TMUXLOG;C;probe;1@@"
+# "%s" splits the literal so the echoed command line can never match SENTINEL.
+SENTINEL_PRINTF = r"printf 'S<@@TMUX%sLOG;C;probe;1@@\033[21D\033[K>E\n' ''"
+
+
+def probe_nested(tmux: str = "tmux") -> dict:
+    """What an OUTER pipe-pane sees when the marks are printed inside a nested tmux."""
+    outer, inner = _server(tmux, "outer"), _server(tmux, "inner")
+    tmp = Path(tempfile.mkdtemp(prefix="tmuxlog-probe-"))
+    raw = tmp / "raw"
+
+    def run(base, *args, check=True):
+        return subprocess.run(base + list(args), capture_output=True, text=True, check=check)
+
+    res = {}
+    try:
+        # The inner tmux needs a TERM with terminfo present; "screen" always is.
+        run(outer, "start-server", ";", "set", "-g", "default-terminal", "screen", ";",
+            "new-session", "-d", "-s", "o", "-x", "120", "-y", "20",
+            "env", "-u", "TMUX", *inner, "new-session", "-s", "i", *_sh())
+        res["inner_started"] = _wait(
+            lambda: run(inner, "has-session", "-t", "i", check=False).returncode == 0, 5.0)
+        if not res["inner_started"]:
+            return res
+        time.sleep(0.5)
+        run(outer, "pipe-pane", "-O", "-t", "o:0.0", f"cat >> '{raw}'")
+        run(inner, "send-keys", "-t", "i", PRINTF, "Enter")
+        run(inner, "send-keys", "-t", "i", SENTINEL_PRINTF, "Enter")
+        time.sleep(1.5)
+        data = raw.read_bytes() if raw.exists() else b""
+        res["outer_bytes"] = len(data)
+        res["osc_reaches_outer_pipe"] = EXPECTED in data
+        res["private_osc_bytes_in_outer_pipe"] = b"\x1b]6973;" in data
+        res["sentinel_reaches_outer_pipe"] = SENTINEL in data
+        screen = run(outer, "capture-pane", "-p", "-t", "o:0.0").stdout
+        res["outer_screen_osc_line"] = next((l for l in screen.splitlines() if "END" in l and "printf" not in l), None)
+        res["outer_screen_sentinel_line"] = next((l for l in screen.splitlines() if l.strip().endswith(">E")
+                                                  and "printf" not in l), None)
+    finally:
+        subprocess.run(inner + ["kill-server"], capture_output=True)
+        subprocess.run(outer + ["kill-server"], capture_output=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+    return res
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="probe tmux for tmuxlog boundary support")
     p.add_argument("--tmux", default="tmux")
+    p.add_argument("--extended", action="store_true",
+                   help="also probe session-scoped hooks and nested tmux")
     args = p.parse_args(argv)
-    print(json.dumps(probe(args.tmux), indent=2))
+    result = probe(args.tmux)
+    if args.extended:
+        result["session_hooks"] = probe_session_hooks(args.tmux)
+        result["nested"] = probe_nested(args.tmux)
+    print(json.dumps(result, indent=2))
     return 0
 
 
