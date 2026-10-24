@@ -67,6 +67,10 @@ def test_seal_on_eof_and_private_modes(tmp_path):
 def test_seal_on_sigterm(tmp_path):
     p = spawn(tmp_path)
     feed_chunks(p, [SAMPLE])
+    deadline = time.monotonic() + 10      # signal only once capture is running its read loop
+    while not ((tmp_path / "raw.bin").exists() and (tmp_path / "raw.bin").read_bytes() == SAMPLE):
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
     p.send_signal(signal.SIGTERM)
     p.wait(10)
     p.stdin.close()

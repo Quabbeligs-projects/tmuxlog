@@ -148,15 +148,18 @@ class Capture:
 
 
 def run(pane_dir: Path, in_fd: int = 0, clock=time.time_ns) -> int:
-    cap = Capture(pane_dir, clock)
-    reason = "eof"
-
     def on_signal(signum, frame):
         raise _Stop(signal.Signals(signum).name)
 
+    # Ignored until the files are open, so a signal during setup cannot kill the
+    # process before it can seal; tmux itself ends a pipe by closing it (EOF).
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    cap = Capture(pane_dir, clock)
+    reason = "eof"
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGHUP, on_signal)
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         while True:
             try:

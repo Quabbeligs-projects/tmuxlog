@@ -14,8 +14,8 @@ __tl_root=${TMUXLOG_ROOT:-$HOME/.tmuxlog}
 __tl_nonce="b$$r$RANDOM$RANDOM"
 __tl_fd=-1 __tl_tty=-1 __tl_dir= __tl_broken= __tl_seq=0 __tl_open=0
 __tl_at_prompt=0 __tl_hnum= __tl_ec=0 __tl_ts=0 __tl_src= __tl_npart=0
-__tl_bmark=$'\e]6973;tmuxlog;B;'"$__tl_nonce"$'\a'
-__tl_psmark="\[$__tl_bmark\]"
+# Mark style, read from <pane>/boundary at arm time: osc (default) or sentinel.
+__tl_style=osc __tl_bmark= __tl_psmark=
 # Cap on T records per command line (a loop fires the trap per iteration).
 __tl_max_part=${TMUXLOG_MAX_PARTS:-32}
 
@@ -27,8 +27,23 @@ __tl_now() {
     __tl_ts=${t}000
 }
 
+# REPLY = the bytes of mark <payload> in the current style (docs/DESIGN.md §2):
+#   osc:      ESC ] 6973 ; tmuxlog ; <payload> BEL
+#   sentinel: @@TMUXLOG;<payload>@@ ESC [ <width> D ESC [ K   (printed, then
+#             cursor-left over exactly itself and erased: never left on screen)
+__tl_markstr() {
+    if [[ $__tl_style == sentinel ]]; then
+        local s="@@TMUXLOG;$1@@"
+        REPLY=$s$'\e['"${#s}"$'D\e[K'
+    else
+        REPLY=$'\e]6973;tmuxlog;'"$1"$'\a'
+    fi
+}
+
 __tl_mark() {
-    (( __tl_tty >= 0 )) && printf '\e]6973;tmuxlog;%s\a' "$1" >&"$__tl_tty" 2>/dev/null
+    (( __tl_tty >= 0 )) || return 0
+    __tl_markstr "$1"
+    printf '%s' "$REPLY" >&"$__tl_tty" 2>/dev/null
     return 0
 }
 
@@ -50,7 +65,7 @@ __tl_disarm() {
     (( __tl_fd >= 0 )) && exec {__tl_fd}>&-
     (( __tl_tty >= 0 )) && exec {__tl_tty}>&-
     __tl_fd=-1 __tl_tty=-1 __tl_dir= __tl_open=0 __tl_at_prompt=0
-    PS1=${PS1//"$__tl_psmark"/}
+    [[ -n $__tl_psmark ]] && PS1=${PS1//"$__tl_psmark"/}
     return 0
 }
 
@@ -76,6 +91,13 @@ __tl_rearm() {
     { exec {__tl_fd}>>"$dir/hooks.rec"; } 2>/dev/null || { __tl_fd=-1 __tl_broken=$dir; return 0; }
     { exec {__tl_tty}>/dev/tty; } 2>/dev/null || __tl_tty=-1
     __tl_dir=$dir
+    __tl_style=osc
+    if [[ -r $dir/boundary ]]; then
+        IFS= read -r REPLY <"$dir/boundary"
+        [[ $REPLY == sentinel ]] && __tl_style=sentinel
+    fi
+    __tl_markstr "B;$__tl_nonce"
+    __tl_bmark=$REPLY __tl_psmark="\[$REPLY\]"
     __tl_now
     printf 'I %s %s %d bash %s %d\n' "$__tl_nonce" "$__tl_ts" "$$" "${BASH_VERSION// /_}" "${SHLVL:-0}" \
         >&"$__tl_fd" 2>/dev/null || { __tl_fail; return 0; }
@@ -113,13 +135,18 @@ __tl_preexec() {
 # DEBUG trap. Must always return 0: under `shopt -s extdebug` a non-zero
 # return would skip the user's command.
 __tl_debug() {
-    (( __tl_fd >= 0 )) || return 0
     # Programmable completion and `bind -x` widgets run at the prompt.
     [[ -n ${COMP_LINE+x} || -n ${READLINE_POINT+x} ]] && return 0
     case $BASH_COMMAND in __tl_*) return 0 ;; esac
     if (( __tl_at_prompt )); then
         __tl_at_prompt=0
-        __tl_preexec
+        # Unarmed only: the pane's arm pointer may have appeared after this
+        # prompt was drawn (new pane racing its pipe-pane hook). rearm writes
+        # the I record before the S below. Armed shells skip this entirely.
+        (( __tl_fd >= 0 )) || __tl_rearm
+        (( __tl_fd >= 0 )) && __tl_preexec
+    elif (( __tl_fd < 0 )); then
+        :
     elif (( __tl_open && __tl_npart < __tl_max_part )) && [[ $__tl_src == bc ]]; then
         # Next stage of a line history did not keep: T <seq> <ts> <nonce> <part> <len>:<cmd>
         (( ++__tl_npart ))
@@ -148,13 +175,12 @@ __tl_precmd() {
 }
 
 # Last PROMPT_COMMAND entry: anything the DEBUG trap sees after this is the
-# user's next command. Re-appends the prompt-end mark in case a prompt
-# framework rebuilt PS1. Returns the command's status so PS1 can still show $?.
+# user's next command (armed or not, so an unarmed shell can arm at preexec).
+# Re-appends the prompt-end mark in case a prompt framework rebuilt PS1.
+# Returns the command's status so PS1 can still show $?.
 __tl_arm() {
-    if (( __tl_fd >= 0 )); then
-        [[ $PS1 == *"$__tl_psmark"* ]] || PS1+=$__tl_psmark
-        __tl_at_prompt=1
-    fi
+    (( __tl_fd >= 0 )) && [[ $PS1 != *"$__tl_psmark"* ]] && PS1+=$__tl_psmark
+    __tl_at_prompt=1
     return $__tl_ec
 }
 

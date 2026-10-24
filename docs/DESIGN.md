@@ -17,7 +17,7 @@
 The hooks print a **private OSC** (not plain OSC 133, which prompt frameworks, remote shells and `cat`-ed logs also emit):
 `ESC ] 6973 ; tmuxlog ; <kind> ; <nonce> ; <seq> [; <exit>] BEL`, with kind ∈ `A` (prompt start), `B` (prompt end, embedded in PS1 via `\[…\]` / `%{…%}`), `C` (pre-exec, the Enter moment), `D` (command done).
 `nonce` = random per shell instance (`$RANDOM$$${EPOCHREALTIME}`, no fork); the splitter accepts a mark only if its nonce was registered in that pane's hook journal, so replaying an old log (`cat master.log`) or remote output can't fake boundaries. Optional `emit_osc133 = true` also emits standard 133 for tmux 3.4's `next-prompt` navigation.
-**Fallback** (`boundary = "sentinel"`, auto-selected if the start-up self-test in a hidden pane sees the OSC dropped — e.g. nested tmux / older tmux): `\r<\x01TMUXLOG:kind:nonce:seq\x01>\r\e[K` — printed, then the line erased, so it flashes at most one frame; the splitter strips it.
+**Fallback** (`boundary = "sentinel"`, auto-selected if `tmuxlog.probe` finds the OSC not passed byte-exact or not invisible, e.g. an older tmux): `@@TMUXLOG;<payload>@@` followed by `ESC[<width>D ESC[K`, i.e. printed, then cursor-left over exactly its own width and erased, so it is never left on screen and is safe at the end of PS1 (a `\r` there would erase the prompt). Same payloads as the OSC. The hooks read the style once at arm time from `<pane>/boundary`; the splitter strips both forms. Limitation: if a mark wraps at the right margin (cursor-left cannot cross lines) its tail stays visible; content is unaffected. **Neither form survives a nested tmux** (probed on 3.4 and 3.7c: the inner tmux swallows the OSC and coalesces the draw-then-erase sentinel away), see §8.
 
 ## 3. File layout (dirs 0700, files 0600, `umask 077` inside every tmuxlog process)
 ```
@@ -52,7 +52,7 @@ E <seq> <ts_ns> <nonce> <exit>
 **Segmenting `raw.bin`** per nonce/seq: `C(n)…D(n)` = block body; `A…B` = prompt (dropped from blocks, kept in raw.bin); `B…C` = typed echo — compared, after ANSI/CR strip, with the hook's `cmd`; if it matches it is dropped, if not (completion redraws, bg output while typing) it goes to an orphan block. `D…A` and anything after `D` that isn't prompt/echo → **orphan block**, timestamped by `arrivals.idx`. Bytes before the first mark → **preamble** block at `created_ns`. Marks themselves are excluded from master.log but stay in raw.bin; offsets + sha256 in the manifest let anyone verify a block against raw.bin.
 
 ## 5. Shell hooks (bash 5+, zsh)
-`source tmuxlog-init.sh` (bash: `trap DEBUG` with an in-command guard + `PROMPT_COMMAND`; zsh: `add-zsh-hook preexec/precmd`). Per command, all builtins, no fork: check arm file with `[[ -e ]]`/`read -r` (lets `start-session`/`stop-session` arm/disarm already-running shells), `printf … >&$fd` to a fd opened once with `exec {fd}>>hooks.rec`, `printf` the OSC to the tty. Regular-file `O_APPEND` writes < 4 KiB never block on any backend; any failure (`fd` gone, disk full) → the hook silently disarms itself; it never `wait`s and never touches the command. Timestamps: zsh `$epochtime` (ns), bash `$EPOCHREALTIME` (µs ×1000 — bash has no ns clock; documented). Full command: zsh preexec `$1` (multi-line, heredoc body included); bash `history 1` (full multi-line entry), falling back to `$BASH_COMMAND` if history is off.
+`source tmuxlog-init.sh` (bash: `trap DEBUG` with an in-command guard + `PROMPT_COMMAND`; zsh: `add-zsh-hook preexec/precmd`). Per command, all builtins, no fork: check arm file with `[[ -r ]]`/`read -r` at each prompt, and at preexec while unarmed (lets `start-session`/`stop-session` arm/disarm already-running shells, and closes the new-pane race), `printf … >&$fd` to a fd opened once with `exec {fd}>>hooks.rec`, `printf` the OSC to the tty. Regular-file `O_APPEND` writes < 4 KiB never block on any backend; any failure (`fd` gone, disk full) → the hook silently disarms itself; it never `wait`s and never touches the command. Timestamps: zsh `$epochtime` (ns), bash `$EPOCHREALTIME` (µs ×1000 — bash has no ns clock; documented). Full command: zsh preexec `$1` (multi-line, heredoc body included); bash `history 1` (full multi-line entry), falling back to `$BASH_COMMAND` if history is off.
 
 ## 6. Finalize algorithm
 1. For each pane dir: parse hooks.rec (tolerating a torn last line), scan raw.bin for marks, build segments (§4), map arrivals for orphans.
@@ -66,7 +66,8 @@ Token estimate = bytes/3 (conservative, no tokenizer). Budget = `num_ctx − pro
 ## 8. Edge cases
 | Case | Behavior |
 |---|---|
-| ssh / msfconsole / vim / nested shell without hooks | One block stays open; finalize seals it `still_running` (or `unterminated` if the pane is gone). Commands on `interactive` list are tagged `interactive: true`. |
+| ssh / msfconsole / vim / nested shell without hooks / **nested tmux** | One block stays open; finalize seals it `still_running` (or `unterminated` if the pane is gone). Commands on `interactive` list are tagged `interactive: true`. |
+| Nested tmux (known limitation) | Shells inside it see the inner server's `$TMUX`, so the outer tmuxlog never arms them, and the inner tmux would swallow their marks anyway. The whole inner tmux is one opaque outer block (raw bytes kept, not segmented), sealed `still_running` until it exits. Run `tmuxlog start-session` on the inner server to log it there. Possible future enhancement: wrap marks in tmux DCS passthrough (`ESC P tmux; …`), which reaches the outer pipe intact when the inner tmux has `allow-passthrough on`. |
 | Nested shell that sources the init | New nonce, `depth = SHLVL delta`; inner commands become their own blocks; outer block keeps the remaining bytes. |
 | `cmd &`, nohup, disown | C and D fire at once; later output → orphan block(s), one per arrival burst (gap > 500 ms), at arrival ns. |
 | bg output *while* a foreground command runs in the same pane | **Cannot be separated in-band** (one pty stream) — lands in the foreground block. Documented limitation. |
@@ -83,7 +84,8 @@ Token estimate = bytes/3 (conservative, no tokenizer). Budget = `num_ctx − pro
 | Hook file unwritable / disk full | write fails | hook disarms silently; command unaffected; `tmuxlog status` reports pane as unarmed |
 | Capture process dies | `pipe-pane` reports no pipe; raw.bin stops growing | `tmuxlog start-session` (idempotent, `pipe-pane -o`) re-attaches; gap recorded in arrivals |
 | Shell not sourcing init | raw bytes but no hook records | whole pane = one `preamble`/unhooked block; `status` warns |
-| OSC dropped (nested tmux) | self-test fails | auto-switch to sentinel mode |
+| OSC dropped or visible (older tmux) | `tmuxlog.probe` | auto-switch to sentinel mode |
+| New pane's first prompt drawn before its arm pointer exists | — | unarmed hooks re-check the pointer at preexec (one stat, armed shells skip it); `I` is written before the first `S` |
 | Torn record from crash | parse error on last line | ignored, counted in manifest `warnings` |
 | Finalize crash | — | atomic rename; rerun |
 | Ollama down / wrong model / ctx overflow | HTTP error | 3 retries, then exact error; prompts kept for replay |
