@@ -75,14 +75,16 @@ __tl_rearm() {
     { exec {__tl_tty}>/dev/tty } 2>/dev/null || __tl_tty=-1
     __tl_dir=$dir
     __tl_now
-    printf 'I %s %s %d zsh\n' $__tl_nonce $__tl_ts $$ >&$__tl_fd 2>/dev/null || { __tl_fail; return 0 }
+    printf 'I %s %s %d zsh %s %d\n' $__tl_nonce $__tl_ts $$ $ZSH_VERSION ${SHLVL:-0} \
+        >&$__tl_fd 2>/dev/null || { __tl_fail; return 0 }
     __tl_mark "I;$__tl_nonce"
     return 0
 }
 
-# $1 is the line as typed (multi-line, heredoc body and leading space
-# included, even under HIST_IGNORE_SPACE); $3 is the full text being executed,
-# used when the history mechanism is off and $1 is empty.
+# $1 is the whole line as typed (pipelines, multi-line, heredoc body and
+# leading space included, even under HIST_IGNORE_SPACE); $3 is the full text
+# being executed, used when the history mechanism is off and $1 is empty.
+# Either way the line is complete, so zsh never needs T records. src=px.
 __tl_preexec() {
     emulate -L zsh
     setopt no_multibyte
@@ -93,7 +95,7 @@ __tl_preexec() {
     [[ -n $cmd ]] || cmd=$3
     (( ++__tl_seq ))
     __tl_open=1
-    printf 'S %d %s %s %d %d:%s %d:%s %d:%s %d:%s\n' $__tl_seq $__tl_ts $__tl_nonce ${SHLVL:-0} \
+    printf 'S %d %s %s %d px %d:%s %d:%s %d:%s %d:%s\n' $__tl_seq $__tl_ts $__tl_nonce ${SHLVL:-0} \
         ${#cmd} "$cmd" ${#PWD} "$PWD" ${#USER} "${USER-}" ${#HOST} "${HOST-}" \
         >&$__tl_fd 2>/dev/null || { __tl_fail; return 0 }
     __tl_mark "C;$__tl_nonce;$__tl_seq"

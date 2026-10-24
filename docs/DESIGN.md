@@ -38,8 +38,14 @@ The hooks print a **private OSC** (not plain OSC 133, which prompt frameworks, r
 No central daemon. Each pane has exactly two writers on disjoint files; everything in `final/` is a pure function of `panes/*` and can be regenerated any time.
 
 ## 4. Data model
-**Hook record** (shell side, length-prefixed so arbitrary bytes incl. newlines need no escaping/forks):
-`S <seq> <ts_ns> <nonce> <shlvl> <len>:<cmd> <len>:<cwd> <len>:<user> <len>:<host>\n` and `E <seq> <ts_ns> <nonce> <exit>\n`, plus `I <nonce> <ts_ns> <pid> <shell>\n` at arm time. Lengths in bytes (`LC_ALL=C ${#v}`). Parsed by `tmuxlog/journal.py`.
+**Hook record** (`hooks.rec`, shell side; `<len>:<v>` fields are byte-length-prefixed via `LC_ALL=C ${#v}`, so values may hold spaces, colons, newlines; parsed by `tmuxlog/journal.py`, which is the format spec):
+```
+I <nonce> <ts_ns> <pid> <shell> [<shell_version> <shlvl>]              arm time
+S <seq> <ts_ns> <nonce> <shlvl> [<src>] <len>:<cmd> <len>:<cwd> <len>:<user> <len>:<host>
+T <seq> <ts_ns> <nonce> <part> <len>:<cmd>                              same (nonce, seq) as its S
+E <seq> <ts_ns> <nonce> <exit>
+```
+`src`: `hist` (bash, full line from history), `bc` (bash, `$BASH_COMMAND` = first simple command), `px` (zsh preexec, always the full line). `T` exists only after an `S` with `src=bc` (e.g. space-prefixed line under `HISTCONTROL=ignorespace`): one per later DEBUG-trap stage of the same line, `part` = 1-based index after the first, capped at 32 per line. All stages share one seq, hence one block; finalize joins them with a visible separator and flags the block, since the shell operators (`|`, `&&`, `;`) are not recoverable from the trap.
 **Block** (assembled by finalize): `{block_id, kind: command|preamble|orphan, pane_uid, pane_id, session, window_index/name, pane_index/title, start_ns, end_ns, exit_code, status: complete|interrupted|still_running|unterminated, cmd, cwd, user, host, shell, depth, raw_offsets:[a,b], bytes_total, bytes_emitted, truncated, echo_dedup: matched|kept, sha256_raw, sha256_clean}`.
 **events.jsonl**: `cmd_start`, `cmd_end` per hook record, then one `block` record per block (above), in final order.
 
