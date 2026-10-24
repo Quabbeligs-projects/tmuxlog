@@ -22,12 +22,12 @@ DEFAULTS: dict = {
         ],
     },
     "tmux": {
-        # tmux 3.x has no pane-created hook; these cover every way a pane appears.
+        # tmux 3.x has no pane-created or after-respawn-pane hook (probed on 3.4
+        # and 3.7c); respawn-pane -k keeps the existing pipe, so none is needed.
         "hooks": [
             "after-new-session",
             "after-new-window",
             "after-split-window",
-            "after-respawn-pane",
         ],
     },
     "ollama": {

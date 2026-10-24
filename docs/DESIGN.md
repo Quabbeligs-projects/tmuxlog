@@ -1,10 +1,10 @@
 # tmuxlog — design (draft for review)
 
-## 0. Validated facts (tmux 3.4, bash 5.2, probed on a headless `tmux -L probe` server)
+## 0. Validated facts (tmux 3.4 and 3.7c, bash 5.2; `python3 -m tmuxlog.probe` re-runs the probe)
 
 | Probe | Result | Consequence |
 |---|---|---|
-| `set-hook -g pane-created …` | `invalid option: pane-created` | **No such hook in 3.4.** Use `after-new-session`, `after-new-window`, `after-split-window`, `after-respawn-pane` + enumerate existing panes at `start-session`. |
+| `set-hook -g pane-created …` | `invalid option: pane-created` | **No such hook in 3.4.** Use `after-new-session`, `after-new-window`, `after-split-window` + enumerate existing panes at `start-session`. `after-respawn-pane` is also invalid (3.4 and 3.7c), but `respawn-pane -k` keeps the pipe open, so the capture process continues. |
 | `printf '\e]133;C;id=42\a…'` and a private `\e]6973;…\e\\` in a pane | Both arrive in `pipe-pane -O` output **byte-exact** | In-band OSC marks work; no printable sentinel needed on 3.4. |
 | `capture-pane` after the same printf | Screen shows `XY` — the OSC is swallowed | Marks are invisible to the user. |
 | `kill-pane` | `pane-exited` does **not** fire; the pipe command **does** get EOF | Capture process seals the pane on stdin EOF; no reliance on hooks for closure. |
