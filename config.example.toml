@@ -49,3 +49,8 @@ response_reserve_tokens = 4096
 # Connection-error retries (with backoff) and per-request timeout.
 retries = 3
 timeout_s = 600
+# Collapse carriage-return/backspace overwrites (progress bars) in the text sent
+# to the model only, so a gobuster/hydra progress line costs one line, not
+# thousands. Never applied to raw.bin, master.log or master.clean.log; the
+# collapsed text is what lands in prompts/, so it stays reproducible.
+collapse_cr = true

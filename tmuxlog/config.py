@@ -39,6 +39,8 @@ DEFAULTS: dict = {
         "response_reserve_tokens": 4096,
         "retries": 3,
         "timeout_s": 600,
+        # Collapse CR/backspace overwrites (progress bars) in the model input only.
+        "collapse_cr": True,
     },
 }
 

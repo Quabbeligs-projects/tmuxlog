@@ -232,6 +232,7 @@ def cmd_analyze(args, cfg) -> int:
                                       endpoint=a["endpoint"], retries=int(a["retries"]),
                                       timeout=float(a["timeout_s"]))
         res = analyze.analyze(session, client, include_raw=args.include_raw,
+                              collapse=bool(a["collapse_cr"]),
                               progress=lambda msg: print(f"tmuxlog: {msg}", file=sys.stderr, flush=True))
     except ValueError as e:                    # non-loopback endpoint, num_ctx too small
         raise SystemExit(f"tmuxlog: {e}")
