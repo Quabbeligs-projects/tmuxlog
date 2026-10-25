@@ -30,15 +30,15 @@ DEFAULTS: dict = {
             "after-split-window",
         ],
     },
-    "ollama": {
+    # [analyze]: local Ollama only. A legacy [ollama] section is merged in.
+    "analyze": {
         "endpoint": "http://127.0.0.1:11434",
         "model": "mistral",
         "num_ctx": 32768,
-        "prompt_reserve_tokens": 2048,
+        "prompt_reserve_tokens": 1536,
         "response_reserve_tokens": 4096,
-        "bytes_per_token": 3.0,
         "retries": 3,
-        "collapse_cr": True,
+        "timeout_s": 600,
     },
 }
 
@@ -62,6 +62,8 @@ def load(path: Path | None = None) -> dict:
     if path.exists():
         with open(path, "rb") as f:
             _merge(cfg, tomllib.load(f))
+    if "ollama" in cfg:                       # legacy section name
+        cfg["analyze"] = {**cfg["analyze"], **cfg.pop("ollama")}
     if "TMUXLOG_ROOT" in os.environ:
         cfg["paths"]["root"] = os.environ["TMUXLOG_ROOT"]
     cfg["paths"]["root"] = str(Path(cfg["paths"]["root"]).expanduser())

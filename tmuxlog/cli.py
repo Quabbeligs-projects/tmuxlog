@@ -1,7 +1,7 @@
 """tmuxlog command line.
 
 Commands: init-script, events, status, start-session, stop-session, finalize,
-export --format jsonl; capture and arm-new are internal (run by tmux).
+analyze, export --format jsonl; capture and arm-new are internal (run by tmux).
 """
 
 import argparse
@@ -220,6 +220,29 @@ def cmd_finalize(args, cfg) -> int:
     return 0
 
 
+def cmd_analyze(args, cfg) -> int:
+    from tmuxlog import analyze
+    a = cfg["analyze"]
+    # analyze.py keeps the chunk reserves as module settings; apply the config.
+    analyze.PROMPT_RESERVE = int(a["prompt_reserve_tokens"])
+    analyze.RESPONSE_RESERVE = int(a["response_reserve_tokens"])
+    session = _resolve_session(cfg, args.session)
+    try:
+        client = analyze.OllamaClient(model=args.model or a["model"], num_ctx=int(a["num_ctx"]),
+                                      endpoint=a["endpoint"], retries=int(a["retries"]),
+                                      timeout=float(a["timeout_s"]))
+        res = analyze.analyze(session, client, include_raw=args.include_raw,
+                              progress=lambda msg: print(f"tmuxlog: {msg}", file=sys.stderr, flush=True))
+    except ValueError as e:                    # non-loopback endpoint, num_ctx too small
+        raise SystemExit(f"tmuxlog: {e}")
+    except analyze.OllamaError as e:           # exact Ollama error, non-zero exit
+        raise SystemExit(f"tmuxlog: Ollama error: {e}")
+    print(f"tmuxlog: analysis of {session.name} ({res['blocks']} block(s), {res['chunks']} chunk(s), "
+          f"model {client.model}) -> {res['analysis']}")
+    print(f"  prompts saved under {res['prompts_dir']}")
+    return 0
+
+
 def cmd_export(args, cfg) -> int:
     if args.format != "jsonl":
         raise SystemExit(f"tmuxlog: export --format {args.format} is not implemented yet")
@@ -268,6 +291,12 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("finalize", help="write final/ master logs, events.jsonl, manifest.json")
     s.add_argument("--session", help="session name (default: most recently modified)")
     s.set_defaults(func=cmd_finalize)
+
+    s = sub.add_parser("analyze", help="local Ollama map/reduce analysis -> analysis.md")
+    s.add_argument("--session", help="session name (default: most recently modified)")
+    s.add_argument("--model", help="Ollama model (default: [analyze] model)")
+    s.add_argument("--include-raw", action="store_true", help="append the blocks after the analysis")
+    s.set_defaults(func=cmd_analyze)
 
     s = sub.add_parser("export", help="export session data")
     s.add_argument("--format", required=True, choices=["raw", "jsonl", "ollama"])

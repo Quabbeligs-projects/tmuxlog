@@ -34,16 +34,18 @@ interactive = [
 # 3.7c); respawn-pane -k keeps the existing pipe, so none is needed.
 hooks = ["after-new-session", "after-new-window", "after-split-window"]
 
-[ollama]
-# Only loopback endpoints are accepted.
+[analyze]
+# Local Ollama only: the endpoint host must be loopback (127.0.0.1, ::1, localhost).
 endpoint = "http://127.0.0.1:11434"
+# Overridden per run by `tmuxlog analyze --model`.
 model = "mistral"
+# Sent explicitly with every request (Ollama's own default is much smaller and
+# would silently truncate the input).
 num_ctx = 32768
-prompt_reserve_tokens = 2048
+# Tokens kept free in each request for the prompt scaffolding and the reply;
+# whole blocks are packed into num_ctx minus these (estimate: 3 bytes/token).
+prompt_reserve_tokens = 1536
 response_reserve_tokens = 4096
-# Conservative bytes-per-token estimate used for chunk packing.
-bytes_per_token = 3.0
+# Connection-error retries (with backoff) and per-request timeout.
 retries = 3
-# Collapse carriage-return/backspace overwrites (progress bars) in the text fed
-# to `analyze` only. master.clean.log is never collapsed.
-collapse_cr = true
+timeout_s = 600

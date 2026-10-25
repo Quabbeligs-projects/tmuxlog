@@ -68,6 +68,7 @@ Token estimate = bytes/3 (conservative, no tokenizer). Budget = `num_ctx − pro
 |---|---|
 | ssh / msfconsole / vim / nested shell without hooks / **nested tmux** | One block stays open; finalize seals it `still_running` (or `unterminated` if the pane is gone). Commands on `interactive` list are tagged `interactive: true`. |
 | Nested tmux (known limitation) | Shells inside it see the inner server's `$TMUX`, so the outer tmuxlog never arms them, and the inner tmux would swallow their marks anyway. The whole inner tmux is one opaque outer block (raw bytes kept, not segmented), sealed `still_running` until it exits. Run `tmuxlog start-session` on the inner server to log it there. Possible future enhancement: wrap marks in tmux DCS passthrough (`ESC P tmux; …`), which reaches the outer pipe intact when the inner tmux has `allow-passthrough on`. |
+| bash line that is only a subshell: `(cmd)`, `(cmd) &` (known V1 limitation) | bash's DEBUG trap does not fire in the parent for a bare subshell, so no `S`/`C`: the output is preserved (raw.bin, an orphan block) but not attributed to a command. zsh is unaffected; `{ …; }`, `(a) \| b`, `if`/`for`, `[[ ]] &&` are captured. Not fixed in V1: `PS0` sees every line, but its expansion side effects do not persist, so an `S` could only be written at precmd, later than the real Enter moment, which would corrupt start-time ordering. Possible future enhancement: have `PS0` write the record itself to an fd. |
 | Nested shell that sources the init | New nonce, `depth = SHLVL delta`; inner commands become their own blocks; outer block keeps the remaining bytes. |
 | `cmd &`, nohup, disown | C and D fire at once; later output → orphan block(s), one per arrival burst (gap > 500 ms), at arrival ns. |
 | bg output *while* a foreground command runs in the same pane | **Cannot be separated in-band** (one pty stream) — lands in the foreground block. Documented limitation. |
@@ -85,6 +86,7 @@ Token estimate = bytes/3 (conservative, no tokenizer). Budget = `num_ctx − pro
 | Capture process dies | `pipe-pane` reports no pipe; raw.bin stops growing | `tmuxlog start-session` (idempotent, `pipe-pane -o`) re-attaches; gap recorded in arrivals |
 | Shell not sourcing init | raw bytes but no hook records | whole pane = one `preamble`/unhooked block; `status` warns |
 | OSC dropped or visible (older tmux) | `tmuxlog.probe` | auto-switch to sentinel mode |
+| bash bare-subshell line | — | output kept as an orphan block; command not attributed (see §8) |
 | New pane's first prompt drawn before its arm pointer exists | — | unarmed hooks re-check the pointer at preexec (one stat, armed shells skip it); `I` is written before the first `S` |
 | Torn record from crash | parse error on last line | ignored, counted in manifest `warnings` |
 | Finalize crash | — | atomic rename; rerun |
