@@ -23,6 +23,12 @@ interactive = [
   "watch", "tmux", "screen", "bash", "zsh", "sh",
 ]
 
+[finalize]
+# Per-block cap in master.log / master.clean.log (head + tail kept, explicit
+# marker; block sha256 is always of the full body). Defaults to
+# capture.max_block_bytes.
+# cap_bytes = 104857600
+
 [tmux]
 # tmux 3.x has no pane-created or after-respawn-pane hook (probed on 3.4 and
 # 3.7c); respawn-pane -k keeps the existing pipe, so none is needed.

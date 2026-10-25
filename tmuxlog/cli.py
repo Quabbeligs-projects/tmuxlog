@@ -1,6 +1,7 @@
 """tmuxlog command line.
 
-Phase 1 commands: init-script, events, status, export --format jsonl.
+Commands: init-script, events, status, start-session, stop-session, finalize,
+export --format jsonl; capture and arm-new are internal (run by tmux).
 """
 
 import argparse
@@ -206,6 +207,19 @@ def cmd_stop_session(args, cfg) -> int:
     return 0
 
 
+def cmd_finalize(args, cfg) -> int:
+    from tmuxlog import finalize
+    session = _resolve_session(cfg, args.session)
+    cap = cfg.get("finalize", {}).get("cap_bytes") or cfg["capture"]["max_block_bytes"]
+    res = finalize.finalize(session, cap_bytes=int(cap))
+    print(f"tmuxlog: finalized {session.name}: {res['blocks']} block(s) -> {res['dir']}")
+    if res["gaps"]:
+        print(f"  WARNING: {res['gaps']} capture gap(s); output is incomplete, see manifest.json")
+    if res["warnings"]:
+        print(f"  {res['warnings']} warning(s) recorded in manifest.json")
+    return 0
+
+
 def cmd_export(args, cfg) -> int:
     if args.format != "jsonl":
         raise SystemExit(f"tmuxlog: export --format {args.format} is not implemented yet")
@@ -250,6 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("arm-new", help="arm newly-created panes (called by tmux hooks)")
     s.add_argument("--session", required=True)
     s.set_defaults(func=cmd_arm_new)
+
+    s = sub.add_parser("finalize", help="write final/ master logs, events.jsonl, manifest.json")
+    s.add_argument("--session", help="session name (default: most recently modified)")
+    s.set_defaults(func=cmd_finalize)
 
     s = sub.add_parser("export", help="export session data")
     s.add_argument("--format", required=True, choices=["raw", "jsonl", "ollama"])
