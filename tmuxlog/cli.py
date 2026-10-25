@@ -224,14 +224,19 @@ def cmd_analyze(args, cfg) -> int:
     from tmuxlog import analyze
     a = cfg["analyze"]
     # analyze.py keeps the chunk reserves as module settings; apply the config.
+    # The response reserve must hold the longest reply allowed (map num_predict
+    # or the reduce cap), or a full-length reply would overflow num_ctx.
+    num_predict = int(a["num_predict"])
     analyze.PROMPT_RESERVE = int(a["prompt_reserve_tokens"])
-    analyze.RESPONSE_RESERVE = int(a["response_reserve_tokens"])
+    analyze.RESPONSE_RESERVE = max(int(a["response_reserve_tokens"]), num_predict,
+                                   analyze.REDUCE_NUM_PREDICT)
     session = _resolve_session(cfg, args.session)
     allow_remote = bool(a.get("allow_remote", False))
     try:
         client = analyze.OllamaClient(model=args.model or a["model"], num_ctx=int(a["num_ctx"]),
                                       endpoint=a["endpoint"], retries=int(a["retries"]),
-                                      timeout=float(a["timeout_s"]), allow_remote=allow_remote)
+                                      timeout=float(a["timeout_s"]), allow_remote=allow_remote,
+                                      num_predict=num_predict)
         if allow_remote:
             try:
                 analyze._assert_loopback(a["endpoint"])

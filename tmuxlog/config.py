@@ -37,8 +37,10 @@ DEFAULTS: dict = {
         "allow_remote": False,
         "model": "mistral",
         "num_ctx": 32768,
-        "prompt_reserve_tokens": 1536,
-        "response_reserve_tokens": 4096,
+        "prompt_reserve_tokens": 1024,
+        "response_reserve_tokens": 2048,
+        # Cap on each map summary's length (tokens); stops runaway generation.
+        "num_predict": 1024,
         "retries": 3,
         "timeout_s": 600,
         # Collapse CR/backspace overwrites (progress bars) in the model input only.
