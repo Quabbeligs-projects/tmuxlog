@@ -186,6 +186,112 @@ def test_e2e_killpane_seals_capture():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_e2e_full_pipeline_three_panes_through_finalize():
+    """start_session -> hook-armed new window -> race + orphan -> stop -> finalize -> final/."""
+    if not shutil.which("tmux"):
+        _skip("tmux not installed")
+    import hashlib
+    import json
+    from tmuxlog import ansi, finalize
+
+    tmp = Path(tempfile.mkdtemp(prefix="tle2e_"))
+    home = tmp / "home"; home.mkdir()
+    root = tmp / "root"; root.mkdir()
+    sock = f"tle2ef-{os.getpid()}"
+    bashrc = home / ".bashrc"
+    bashrc.write_text(f"PS1='RDY$ '\nHISTFILE={home}/.hist\nsource {INIT}\n")
+    env = {**os.environ, "HOME": str(home), "TMUXLOG_ROOT": str(root),
+           "PYTHONPATH": str(REPO), "TERM": "xterm"}
+    shell = f"bash --rcfile {bashrc} --noprofile -i"
+    base = ["tmux", "-L", sock, "-f", "/dev/null"]
+    cfg = {"paths": {"root": str(root)}}
+    tm = Tmux(base)
+
+    def tmux(*a):
+        return subprocess.run(base + list(a), env=env, capture_output=True, text=True)
+
+    def pane_dir_of(pane_id):
+        ptr = root / "run" / str(tm.server_pid()) / pane_id.lstrip("%")
+        return Path(ptr.read_text().strip()) if ptr.exists() else None
+
+    try:
+        subprocess.run(base + ["new-session", "-d", "-s", "full", "-x", "200", "-y", "50", shell],
+                       env=env, check=True)
+        tmux("split-window", "-t", "full", shell)
+        assert _wait(lambda: len(tm.list_panes("full")) == 2)
+        res = start_session("full", cfg, tmux=tm, boundary="osc")
+        assert [p["status"] for p in res["panes"]] == ["armed", "armed"], res["panes"]
+        session_dir = Path(res["dir"])
+
+        # a pane created AFTER start_session is armed by the session-scoped hook
+        new = tmux("new-window", "-P", "-F", "#{pane_id}", "-t", "full", shell).stdout.strip()
+        assert _wait(lambda: pane_dir_of(new) is not None and
+                     tm.run("display-message", "-p", "-t", new, "#{pane_pipe}").stdout.strip() == "1")
+        p0, p1 = (p["pane_id"] for p in res["panes"])
+        pdir = {p0: Path(res["panes"][0]["pane_dir"]), p1: Path(res["panes"][1]["pane_dir"]),
+                new: pane_dir_of(new)}
+
+        tmux("send-keys", "-t", p0, "printf 'scan: \\033[1;31m22/tcp open\\033[0m\\n'", "Enter")
+        assert _wait(lambda: _done_count(pdir[p0]) >= 1)
+        # the race, across windows: long starts first in p0, short just after in the new window
+        tmux("send-keys", "-t", p0, "sleep 1; echo LONG-SCAN-DONE", "Enter")
+        time.sleep(0.15)
+        tmux("send-keys", "-t", new, "echo SHORT-ENUM-DONE", "Enter")
+        # background job in p1: its late output must become an orphan block. A
+        # plain `cmd &` (bash does not attribute async lists/groups, see DESIGN §8)
+        tmux("send-keys", "-t", p1, "sh -c 'sleep 0.4; echo ORPHAN-LATE' &", "Enter")
+        assert _wait(lambda: _done_count(pdir[p0]) >= 2 and _done_count(pdir[new]) >= 1
+                     and _done_count(pdir[p1]) >= 1, timeout=20)
+        assert _wait(lambda: b"ORPHAN-LATE" in (pdir[p1] / "raw.bin").read_bytes())
+
+        stop_session("full", cfg, tmux=tm)
+        assert _wait(lambda: all((d / "sealed").exists() for d in pdir.values()), timeout=10)
+        finalize.finalize(session_dir)
+
+        fin = session_dir / "final"
+        man = json.loads((fin / "manifest.json").read_text())
+        master = (fin / "master.log").read_bytes()
+        clean = (fin / "master.clean.log").read_bytes()
+        blocks = man["blocks"]
+        cmds = [b for b in blocks if b["kind"] == "command"]
+
+        # every pane, including the hook-armed one, contributed command blocks
+        assert {b["pane_uid"] for b in cmds} == {d.name for d in pdir.values()}
+        # final order is by start_ns, never by arrival
+        starts = [b["start_ns"] for b in blocks if b["start_ns"] is not None]
+        assert starts == sorted(starts)
+        longc = next(b for b in cmds if b["cmd"] == "sleep 1; echo LONG-SCAN-DONE")
+        shortc = next(b for b in cmds if b["cmd"] == "echo SHORT-ENUM-DONE")
+        assert longc["start_ns"] < shortc["start_ns"] and longc["end_ns"] > shortc["end_ns"]
+        assert cmds.index(longc) < cmds.index(shortc)
+        assert all(b["status"] == "complete" and b["exit_code"] == 0 for b in cmds)
+
+        # atomicity: each block body holds only its own pane's output
+        bodies = {}
+        for chunk in clean.split(b"===== BLOCK ")[1:]:
+            bid = int(chunk.split(b" ", 1)[0])
+            bodies[bid] = chunk.split(b"----- output -----\n", 1)[1].rsplit(b"===== END BLOCK", 1)[0]
+        assert b"LONG-SCAN-DONE" in bodies[longc["block_id"]]
+        assert b"SHORT-ENUM-DONE" not in bodies[longc["block_id"]]
+        assert b"LONG-SCAN-DONE" not in bodies[shortc["block_id"]]
+        orphans = [b for b in blocks if b["kind"] == "orphan" and b"ORPHAN-LATE" in bodies[b["block_id"]]]
+        assert len(orphans) == 1 and orphans[0]["pane_uid"] == pdir[p1].name
+
+        # evidence integrity
+        assert ansi.strip(master) == clean and b"\x1b[1;31m" in master
+        sha = lambda d: hashlib.sha256(d).hexdigest()
+        for name, info in man["files"].items():
+            assert sha((fin / name).read_bytes()) == info["sha256"], name
+        for b in blocks:
+            a, e = b["raw_offsets"]
+            body = (session_dir / "panes" / b["pane_uid"] / "raw.bin").read_bytes()[a:e]
+            assert sha(body) == b["sha256_raw"], b["block_id"]
+        assert man["gaps"] == []
+    finally:
+        subprocess.run(base + ["kill-server"], env=env, capture_output=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     import traceback
     names = sorted(k for k, v in list(globals().items())
