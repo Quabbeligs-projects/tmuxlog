@@ -14,7 +14,8 @@ panes and windows of a tmux session.
 - **Raw bytes are always kept.** An ANSI-stripped `master.clean.log` is written
   alongside; it differs from the raw log only in escape sequences.
 - **A JSONL event journal** for tooling, plus a sha256 manifest.
-- **Optional local AI summary** via Ollama on `127.0.0.1` only.
+- **Optional AI summary** via Ollama: loopback (`127.0.0.1`) by default, or a host
+  you control (see [Running Ollama on another machine](#running-ollama-on-another-machine-eg-a-gpu-host)).
 
 > **The logs contain everything verbatim**: credentials, keys, tokens, hashes.
 > That is intentional: they are evidence for your private use. tmuxlog does no
@@ -130,6 +131,69 @@ Output that arrives after a command has finished goes into an **orphan** block,
 timestamped on arrival (typically a background job). Output before the first
 command goes into a **preamble** block.
 
+## Running Ollama on another machine (e.g. a GPU host)
+
+`analyze` talks to `127.0.0.1:11434` by default. If Ollama runs on another
+machine, there are two ways to reach it. They differ in what crosses the
+network, so pick one deliberately. Remember that the logs contain credentials,
+keys and hashes verbatim, and `analyze` sends the session's clean log to the
+model.
+
+| | (a) Direct | (b) SSH tunnel |
+|---|---|---|
+| Log data on the LAN | **plain, unencrypted HTTP** | encrypted inside SSH |
+| tmuxlog config | `endpoint` = GPU host, `allow_remote = true` | unchanged (loopback only) |
+| Ollama on the GPU host listens on | the LAN (`OLLAMA_HOST=0.0.0.0:11434`) | loopback only (`127.0.0.1:11434`) |
+| Pick it when | a trusted host on a trusted network, simplest setup | the network isn't fully trusted, or you can't or won't expose Ollama on the host's LAN interface |
+
+### (a) Direct: simplest, but plain HTTP on the LAN
+
+On the GPU host:
+
+```sh
+ollama pull mistral
+OLLAMA_HOST=0.0.0.0:11434 ollama serve     # listen on the LAN, not only on loopback
+```
+
+If Ollama runs as a systemd service, set the variable there instead
+(`sudo systemctl edit ollama`, then add
+`Environment="OLLAMA_HOST=0.0.0.0:11434"` under `[Service]`, then restart it).
+
+In tmuxlog's `~/.tmuxlog/config.toml` on the capture box:
+
+```toml
+[analyze]
+endpoint = "http://<GPU-HOST-IP>:11434"
+allow_remote = true
+```
+
+Every `analyze` run then prints
+`WARNING: sending session data to http://<GPU-HOST-IP>:11434 (allow_remote=on)`.
+Anyone who can sniff that network segment can read the log, and Ollama itself
+has no authentication. Only use this on a host and network you trust, and
+firewall port 11434 on the GPU host to the capture box's address.
+
+### (b) SSH loopback tunnel: keeps strict loopback-only, encrypted
+
+On the GPU host, leave Ollama on its default loopback address
+(`OLLAMA_HOST` unset, or `127.0.0.1:11434`) and pull the model:
+`ollama pull mistral`.
+
+On the capture box, stop any local Ollama first so port 11434 is free (e.g.
+`systemctl stop ollama`, or quit `ollama serve`), then open the tunnel:
+
+```sh
+ssh -f -N -L 127.0.0.1:11434:127.0.0.1:11434 USER@GPU-HOST-IP
+```
+
+This maps the capture box's `127.0.0.1:11434` to the GPU host's own
+`127.0.0.1:11434` over SSH. tmuxlog's config stays unchanged
+(`endpoint = "http://127.0.0.1:11434"`, `allow_remote = false`) and `analyze`
+stays loopback-only. The log crosses the network only inside the SSH
+connection. Close the tunnel afterwards with
+`pkill -f 'ssh -f -N -L 127.0.0.1:11434'`, or keep it up with your usual SSH
+config (`LocalForward 127.0.0.1:11434 127.0.0.1:11434`).
+
 ## Troubleshooting
 
 ### 1. Commands in a pane are not logged (unarmed shell)
@@ -192,7 +256,7 @@ These are captured normally:
 |---|---|
 | `Ollama error: cannot reach Ollama at http://127.0.0.1:11434 after 3 tries` | Start it: `ollama serve`. Retries and timeout are under `[analyze]`. |
 | `Ollama error: HTTP 404 from Ollama: … model "x" not found …` | `ollama pull <model>`, or pass `--model` / set `[analyze] model`. |
-| `refuses a non-loopback endpoint` | By design: only `127.0.0.1`, `::1` or `localhost` are accepted. |
+| `refuses a non-loopback endpoint` | By default only `127.0.0.1`, `::1` or `localhost` are accepted. For a GPU host, use an SSH tunnel or `allow_remote` (see [Running Ollama on another machine](#running-ollama-on-another-machine-eg-a-gpu-host)). |
 | Analysis looks wrong or ignores parts of the log | Check `prompts/<run>/chunk-NNN.txt`: these are the exact prompts sent, after `collapse_cr` (set `collapse_cr = false` to send progress-bar output uncollapsed). Lower `num_ctx` if the model can't handle 32k; tmuxlog always sends `num_ctx` explicitly and packs whole blocks to fit it. |
 
 `analyze` exits non-zero with Ollama's exact error message.

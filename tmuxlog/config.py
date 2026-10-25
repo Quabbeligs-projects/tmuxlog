@@ -30,9 +30,11 @@ DEFAULTS: dict = {
             "after-split-window",
         ],
     },
-    # [analyze]: local Ollama only. A legacy [ollama] section is merged in.
+    # [analyze]: loopback Ollama unless allow_remote. A legacy [ollama] section is merged in.
     "analyze": {
         "endpoint": "http://127.0.0.1:11434",
+        # Logs hold secrets verbatim: only enable for a host and network you trust.
+        "allow_remote": False,
         "model": "mistral",
         "num_ctx": 32768,
         "prompt_reserve_tokens": 1536,

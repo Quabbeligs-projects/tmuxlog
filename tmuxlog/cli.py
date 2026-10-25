@@ -227,10 +227,17 @@ def cmd_analyze(args, cfg) -> int:
     analyze.PROMPT_RESERVE = int(a["prompt_reserve_tokens"])
     analyze.RESPONSE_RESERVE = int(a["response_reserve_tokens"])
     session = _resolve_session(cfg, args.session)
+    allow_remote = bool(a.get("allow_remote", False))
     try:
         client = analyze.OllamaClient(model=args.model or a["model"], num_ctx=int(a["num_ctx"]),
                                       endpoint=a["endpoint"], retries=int(a["retries"]),
-                                      timeout=float(a["timeout_s"]))
+                                      timeout=float(a["timeout_s"]), allow_remote=allow_remote)
+        if allow_remote:
+            try:
+                analyze._assert_loopback(a["endpoint"])
+            except ValueError:
+                print(f"tmuxlog: WARNING: sending session data to {a['endpoint']} (allow_remote=on)",
+                      file=sys.stderr, flush=True)
         res = analyze.analyze(session, client, include_raw=args.include_raw,
                               collapse=bool(a["collapse_cr"]),
                               progress=lambda msg: print(f"tmuxlog: {msg}", file=sys.stderr, flush=True))
