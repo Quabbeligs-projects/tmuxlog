@@ -1,6 +1,3 @@
-# tmuxlog configuration. Copy to ~/.tmuxlog/config.toml; every key is optional
-# and the values below are the built-in defaults.
-
 [paths]
 # All state lives here (dirs 0700, files 0600). Logs contain secrets verbatim.
 root = "~/.tmuxlog"
@@ -45,13 +42,12 @@ endpoint = "http://127.0.0.1:11434"
 allow_remote = false
 # Overridden per run by `tmuxlog analyze --model`.
 model = "mistral"
-# Sent explicitly with every request (Ollama's own default is much smaller and
-# would silently truncate the input).
+# Sent explicitly with every request (Ollama's own default is much smaller)
 # It must fit in the GPU's FREE VRAM together with the model. If it doesn't,
-# Ollama spills layers to the CPU and slows to a crawl. 8192 is a safe value
-# for an 8 GB card; use 32768 only with plenty of VRAM, or for CPU-only runs.
-# While analyze runs, `ollama ps` should show "100% GPU" for the model; any
-# CPU share (e.g. "45%/55% CPU/GPU") means: lower num_ctx.
+# Ollama spills layers to the CPU and slows. 8192 is a safe value for an 8 GB
+# card, use 32768 only with plenty of VRAM, or for CPU-only runs. While analyze
+# runs, `ollama ps` should show "100% GPU" for the model; any CPU share
+# (e.g. "45%/55% CPU/GPU") means: lower num_ctx.
 num_ctx = 32768
 # Tokens kept free in each request for the prompt scaffolding and the reply;
 # whole blocks are packed into num_ctx minus these (estimate: 3 bytes/token).
