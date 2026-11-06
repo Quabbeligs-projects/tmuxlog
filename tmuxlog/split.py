@@ -1,40 +1,3 @@
-"""Split a pane's raw.bin into ordered blocks — a pure function of the pane files.
-
-Reads raw.bin, hooks.rec, arrivals.idx (and `sealed` if present) and returns the
-blocks for that pane. finalize (Phase 3) adds pane/session metadata, sha256,
-truncation and cross-pane ordering; this module only does the segmentation, which
-is the subtle part.
-
-Boundary marks (osc mode) live in raw.bin as the private OSC
-``ESC ] 6973 ; tmuxlog ; <KIND> ; <nonce> [; <seq> [; <exit>]] (BEL | ST)``
-emitted by the shell hooks (docs/DESIGN.md §2):
-
-    I  init (a nonce registered)        A  prompt start
-    B  prompt end (embedded in PS1)     C  pre-exec, the Enter moment
-    D  command done
-
-A mark is honoured only if its nonce appears in hooks.rec; a mark with an
-unknown nonce (a replayed or `cat`-ed old log, injected output) is NOT a
-boundary — it stays inside whatever block contains it. Segmentation, per §4:
-
-    before the first mark                     -> preamble block
-    region opened by A (A..B)                 -> prompt, dropped
-    region opened by B (B..C)                 -> typed echo: compared with the
-                                                 command; matched -> dropped,
-                                                 else -> orphan
-    region opened by C (C..D)                 -> command block body
-    region opened by D (D..next)              -> orphan (background output etc.)
-    region opened by I                        -> setup, dropped
-
-Command metadata (cmd, cwd, user, host, shell, depth, timestamps, exit) comes
-from the matching hooks.rec records, not the marks. A command whose D mark is
-missing (pane killed, shell exited) is left open: still_running if the pane is
-not sealed, else unterminated. Orphan and preamble timestamps come from
-arrivals.idx.
-
-stdlib only; uses tmuxlog.journal, tmuxlog.ansi and tmuxlog.capture.read_arrivals.
-"""
-
 from __future__ import annotations
 
 import bisect
@@ -44,17 +7,13 @@ from pathlib import Path
 from tmuxlog import ansi, journal
 from tmuxlog.capture import read_arrivals
 
-OSC_PREFIX = b"\x1b]6973;tmuxlog;"        # osc mode: invisible, BEL/ST terminated
-SENT_PREFIX = b"@@TMUXLOG;"                # sentinel mode: printed then erased
+OSC_PREFIX = b"\x1b]6973;tmuxlog;"
+SENT_PREFIX = b"@@TMUXLOG;"
 SENT_CLOSE = b"@@"
 BEL = 0x07
 ESC = 0x1B
 
-
-# ---------------------------------------------------------------------------
 # mark scanning
-# ---------------------------------------------------------------------------
-
 def _mk(payload: bytes, start: int, end: int) -> dict:
     f = payload.split(b";")
     return {
@@ -67,7 +26,6 @@ def _mk(payload: bytes, start: int, end: int) -> dict:
 
 
 def _osc_payload_end(raw: bytes, ps: int):
-    """Payload bytes and end offset of an OSC mark starting its payload at ps."""
     k = ps
     while k < len(raw):
         if raw[k] == BEL:
@@ -79,14 +37,12 @@ def _osc_payload_end(raw: bytes, ps: int):
 
 
 def _consume_csi(raw: bytes, i: int, final: int) -> int:
-    """If raw[i:] is a CSI ending in byte `final`, return the offset past it, else i."""
     if raw[i:i + 2] != b"\x1b[":
         return i
     k = i + 2
-    while k < len(raw) and 0x30 <= raw[k] <= 0x3F:   # parameter / intermediate bytes
+    while k < len(raw) and 0x30 <= raw[k] <= 0x3F:
         k += 1
     return k + 1 if k < len(raw) and raw[k] == final else i
-
 
 def _scan_marks(raw: bytes) -> tuple[list[dict], int]:
     """Find every boundary mark (osc or sentinel). Returns (marks, unterminated)."""
@@ -111,40 +67,25 @@ def _scan_marks(raw: bytes) -> tuple[list[dict], int]:
                 unterminated += 1
                 break
             end = close + len(SENT_CLOSE)
-            # swallow the trailing erase (ESC[<width>D ESC[K) so the printed
-            # sentinel text never reaches a block body / the clean log
             end = _consume_csi(raw, end, ord("D"))
             end = _consume_csi(raw, end, ord("K"))
             marks.append(_mk(raw[ps:close], s, end))
             i = end
     return marks, unterminated
 
-
-# ---------------------------------------------------------------------------
 # helpers
-# ---------------------------------------------------------------------------
-
 def _norm(data: bytes) -> str:
     """ANSI-stripped, CR-removed, end-trimmed text for echo comparison."""
     s = ansi.strip(data).decode("utf-8", "surrogateescape")
     return s.replace("\r", "").strip()
 
-
 def _echo_matches(region: bytes, cmd: str | None) -> bool:
-    # The echo region is dropped only when it IS the echoed command line (after
-    # ANSI/CR strip), not when the command merely appears inside it — otherwise
-    # stray output printed at the prompt would be swallowed. A multi-line echo
-    # (heredoc, continuation prompts) won't match and becomes an orphan, which
-    # is the documented behaviour.
     if not cmd:
         return False
     nc = cmd.replace("\r", "").strip()
     return bool(nc) and _norm(region) == nc
 
-
 class _Clock:
-    """Map a raw.bin offset to the arrival time of the read that delivered it."""
-
     def __init__(self, arrivals: list[tuple[int, int]]):
         arrivals = sorted(arrivals, key=lambda a: a[1])
         self._offs = [off for _, off in arrivals]
@@ -155,14 +96,9 @@ class _Clock:
             return None
         i = bisect.bisect_right(self._offs, offset) - 1
         return self._ts[i] if i >= 0 else self._ts[0]
-
-
-# ---------------------------------------------------------------------------
+        
 # main
-# ---------------------------------------------------------------------------
-
 def split(pane_dir, sealed: bool | None = None) -> dict:
-    """Return {"blocks": [...], "warnings": [...]} for one pane directory."""
     d = Path(pane_dir)
     raw = (d / "raw.bin").read_bytes() if (d / "raw.bin").exists() else b""
     hooks = (d / "hooks.rec").read_bytes() if (d / "hooks.rec").exists() else b""
@@ -218,7 +154,7 @@ def split(pane_dir, sealed: bool | None = None) -> dict:
             "shell_version": info.get("shell_version"),
         }
 
-    # preamble: everything before the first honoured mark
+    # preamble
     first = marks[0]["start"] if marks else len(raw)
     pre = region_block("preamble", 0, first)
     if pre:
@@ -232,7 +168,6 @@ def split(pane_dir, sealed: bool | None = None) -> dict:
         kind = m["kind"]
 
         if kind == "B":
-            # typed echo up to the next command's C mark
             if nxt and nxt["kind"] == "C":
                 key = (nxt["nonce"], nxt["seq"])
                 cmd = S.get(key, {}).get("cmd")
@@ -276,15 +211,10 @@ def split(pane_dir, sealed: bool | None = None) -> dict:
             blocks.append(block)
 
         elif kind == "D":
-            # output arriving after the command finished, before the next prompt
             blk = region_block("orphan", a, b)
             if blk:
                 blocks.append(blk)
-
-        # kind A or I: prompt / setup region, dropped
-
     return {"blocks": blocks, "warnings": warnings}
-
 
 def sealed_summary(pane_dir) -> dict | None:
     p = Path(pane_dir) / "sealed"
