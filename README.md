@@ -22,6 +22,15 @@ git clone https://github.com/Quabbeligs-projects/tmuxlog.git ~/tools/tmuxlog
 ln -s ~/tools/tmuxlog/bin/tmuxlog ~/.local/bin/tmuxlog
 ```
 
+`~/.local/bin` has to exist and be on your `PATH` for the `tmuxlog` command to
+work. If it isn't already:
+
+```sh
+mkdir -p ~/.local/bin
+# and, if it's not on PATH yet, add this to your ~/.bashrc or ~/.zshrc:
+export PATH="$HOME/.local/bin:$PATH"
+```
+
 Then add one line to the end of your `~/.bashrc` or `~/.zshrc`.
 
 ```sh
@@ -31,8 +40,13 @@ source "$(tmuxlog init-script)"
 The hooks stay inert until `tmuxlog start-session` arms a pane. They cost no
 forks per command and never block or alter a command.
 
-Optional: `cp config.example.toml ~/.tmuxlog/config.toml` and edit it. Every key
-is documented there and every key is optional.
+Optional: create `~/.tmuxlog`, copy the example config into it, and edit it.
+Every key is documented there and every key is optional.
+
+```sh
+mkdir -p ~/.tmuxlog
+cp ~/tools/tmuxlog/config.example.toml ~/.tmuxlog/config.toml
+```
 
 ## Commands
 
@@ -78,10 +92,24 @@ Output that arrives after a command has finished goes into an **orphan** block,
 timestamped on arrival (typically a background job). Output before the first
 command goes into a **preamble** block.
 
+## Output files
+
+`master.log` is the raw session log, with escape codes, etc…. Its sha256.
+
+`master.clean.log` is the session log as plain text.
+
+`events.jsonl` is the structured view.
+
+`manifest.json` is the index and the integrity check, it has every block with its
+timestamps, exit code, byte range and sha256, the per-file hashes, and any
+capture gaps.
+
+`analysis.md` only shows up if you run `analyze`, with the prompts saved in `prompts/`.
+
 ## Running Ollama on another machine (e.g. a GPU host)
 
 `analyze` uses `127.0.0.1:11434` by default. If Ollama runs on another
-machine, there are two ways to reach it. Option a is easiest, it’s just direct, plain unencrypted HTTP, use it when you can trust the network.Option b is harder, using an SSH tunnel to encrypt the data, use it when the network isn't fully trusted, or you can't or won't expose Ollama on the host's LAN interface. Remember that the logs contain credentials,
+machine, there are two ways to reach it. Option a is easiest, it’s just direct, plain unencrypted HTTP, use it when you can trust the network. Option b is harder, using an SSH tunnel to encrypt the data, use it when the network isn't fully trusted, or you can't or won't expose Ollama on the host's LAN interface. Remember that the logs contain credentials,
 keys and hashes verbatim, and `analyze` sends the session's clean log to the model.
 
 ### (a) Direct
@@ -190,10 +218,10 @@ These are captured normally:
 
 | Message | Fix |
 |---|---|
-| `Ollama error: cannot reach Ollama at http://127.0.0.1:11434 after 3 tries` | Start it: `ollama serve`. Retries and timeout are under `[analyze]`. |
+| `Ollama error: cannot reach Ollama at http://127.0.0.1:11434 after 3 tries` | Ollama isn't reachable. Start it with `ollama serve`, or re-open the SSH tunnel if it runs on another host. |
 | `Ollama error: HTTP 404 from Ollama: … model "x" not found …` | `ollama pull <model>`, or pass `--model` / set `[analyze] model`. |
 | `refuses a non-loopback endpoint` | By default only `127.0.0.1`, `::1` or `localhost` are accepted. For a GPU host, use an SSH tunnel or `allow_remote`. |
 | `analyze` is very slow, or seems stuck on one chunk | Run `ollama ps` while it works. Anything other than `100% GPU` (e.g. `45%/55% CPU/GPU`) means `num_ctx` plus the model don't fit in free VRAM and layers spilled to the CPU: lower `[analyze] num_ctx` (8192 is safe on an 8 GB card). Each chunk summary is capped by `num_predict` (default 1024 tokens) and the final reduce at 2048, so a looping model can't generate forever. To watch progress, follow the Ollama server log: `journalctl -u ollama -f` for the Linux service, the terminal running `ollama serve`, or `~/.ollama/logs/server.log` for the desktop app. A climbing `n_gen` means it is still generating, and `tg` t/s is the generation speed. |
-| Analysis looks wrong or ignores parts of the log | Check `prompts/<run>/chunk-NNN.txt` these are the exact prompts sent, after `collapse_cr` (set `collapse_cr = false` to send progress-bar output uncollapsed). Lower `num_ctx` if the model can't handle 32k; tmuxlog always sends `num_ctx` explicitly and packs whole blocks to fit it. |
+| Analysis looks wrong or ignores parts of the log | Check `prompts/<run>/chunk-NNN.txt` — these are the exact prompts sent, after `collapse_cr` (set `collapse_cr = false` to send progress-bar output uncollapsed). Lower `num_ctx` if the model can't handle 32k; tmuxlog always sends `num_ctx` explicitly and packs whole blocks to fit it. |
 
 `analyze` exits non-zero with Ollama's exact error message.
