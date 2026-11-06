@@ -1,6 +1,6 @@
 # tmuxlog
 
-One chronological, per-command evidence log for everything you run across all
+Chronological, per-command log across all
 panes and windows of a tmux session.
 
 - **One block per command.** Each block is a command plus its full output and
