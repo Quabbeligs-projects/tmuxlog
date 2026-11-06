@@ -1,18 +1,3 @@
-"""Per-pane capture process, launched by `tmux pipe-pane -O` (docs/DESIGN.md §3).
-
-Records and does not interpret: every read() of the pane's output is appended
-verbatim to raw.bin, and a 16-byte arrival record (arrival_ns, raw_offset) to
-arrivals.idx, both little-endian u64. Splitting into blocks happens later in
-split.py, as a pure function of these files.
-
-It never stops draining stdin: if a write fails (disk full, I/O error) the
-bytes are dropped, the pane keeps running, and the hole is recorded in
-gaps.jsonl as a stream byte range with timestamps. Gap records that cannot be
-written yet are retried on every read and at EOF. On EOF (pane closed, pipe
-closed by stop-session, server killed) or SIGTERM/SIGHUP the pane is sealed:
-`sealed` gets a JSON summary, after an fsync of raw.bin and arrivals.idx.
-"""
-
 import errno
 import json
 import os
@@ -26,13 +11,10 @@ from tmuxlog import paths
 ARRIVAL = struct.Struct("<QQ")
 READ_SIZE = 65536
 
-
 class _Stop(Exception):
     pass
 
-
 def _write_all(fd: int, data: bytes) -> int:
-    """Write as much of `data` as possible; return bytes written, raise only if none were."""
     done = 0
     while done < len(data):
         try:
@@ -46,7 +28,6 @@ def _write_all(fd: int, data: bytes) -> int:
         done += n
     return done
 
-
 class Capture:
     def __init__(self, pane_dir: Path, clock=time.time_ns):
         self.dir = Path(pane_dir)
@@ -54,11 +35,10 @@ class Capture:
         paths.ensure_dir(self.dir)
         self.raw_fd = self._open("raw.bin")
         self.idx_fd = self._open("arrivals.idx")
-        # Re-attach appends: offsets continue from the current end of raw.bin.
         self.raw_offset = os.fstat(self.raw_fd).st_size
         self.stream_offset = 0
-        self.gap = None            # open gap being extended while writes keep failing
-        self.pending_gaps = []     # closed gaps not yet written to gaps.jsonl
+        self.gap = None            
+        self.pending_gaps = []     
         self.gaps_total = 0
         (self.dir / "capture.pid").write_text(f"{os.getpid()} {self.clock()}\n")
         os.chmod(self.dir / "capture.pid", paths.FILE_MODE)
@@ -75,10 +55,10 @@ class Capture:
             return
         self._close_gap()
         self.gap = {
-            "kind": kind,                       # "raw": bytes lost; "arrivals": bytes kept, timestamp lost
+            "kind": kind,                       
             "stream_start": stream_start,
             "stream_end": stream_start + nbytes,
-            "raw_offset": self.raw_offset,      # where the hole sits in raw.bin
+            "raw_offset": self.raw_offset,      
             "bytes": nbytes,
             "first_ts_ns": ts,
             "last_ts_ns": ts,
@@ -99,7 +79,7 @@ class Capture:
             with paths.open_private(self.dir / "gaps.jsonl", "ab") as f:
                 f.write(data)
         except OSError:
-            return  # disk still full; retry on the next read
+            return  
         self.pending_gaps.clear()
 
     def feed(self, data: bytes) -> None:
@@ -150,9 +130,7 @@ class Capture:
 def run(pane_dir: Path, in_fd: int = 0, clock=time.time_ns) -> int:
     def on_signal(signum, frame):
         raise _Stop(signal.Signals(signum).name)
-
-    # Ignored until the files are open, so a signal during setup cannot kill the
-    # process before it can seal; tmux itself ends a pipe by closing it (EOF).
+        
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -175,13 +153,11 @@ def run(pane_dir: Path, in_fd: int = 0, clock=time.time_ns) -> int:
         cap.seal(reason)
     return 0
 
-
 def read_arrivals(pane_dir: Path) -> list[tuple[int, int]]:
     """(arrival_ns, raw_offset) pairs; a torn trailing record is ignored."""
     data = (Path(pane_dir) / "arrivals.idx").read_bytes()
     usable = len(data) - len(data) % ARRIVAL.size
     return [ARRIVAL.unpack_from(data, i) for i in range(0, usable, ARRIVAL.size)]
-
 
 def read_gaps(pane_dir: Path) -> list[dict]:
     p = Path(pane_dir) / "gaps.jsonl"
@@ -192,5 +168,5 @@ def read_gaps(pane_dir: Path) -> list[dict]:
         try:
             out.append(json.loads(line))
         except json.JSONDecodeError:
-            pass  # torn last line
+            pass
     return out
