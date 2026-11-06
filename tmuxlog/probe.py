@@ -1,22 +1,3 @@
-"""Empirical tmux capability probe: decides the in-band boundary mechanism.
-
-Runs on a throwaway tmux server (`-L tmuxlog-probe-<pid> -f /dev/null`):
-
-1. pipe-pane -O passthrough: a pane prints text interleaved with the private
-   tmuxlog OSC (BEL- and ST-terminated) and an OSC 133 mark; the probe checks
-   the exact bytes arrive in the pipe.
-2. Invisibility: capture-pane must show the surrounding text with nothing
-   between it, i.e. tmux swallowed the marks instead of rendering them.
-3. Hook names: which pane-creation hooks this tmux accepts (3.x has no
-   pane-created).
-4. Pane close: kill-pane must give the pipe command EOF (the capture process
-   relies on that to seal a pane, since pane-exited does not fire for it).
-
-`boundary` is "osc" if 1 and 2 hold, else "sentinel".
-
-    python3 -m tmuxlog.probe [--tmux /path/to/tmux]
-"""
-
 import argparse
 import json
 import os
@@ -28,14 +9,10 @@ from pathlib import Path
 
 HOOKS = ["pane-created", "after-new-session", "after-new-window",
          "after-split-window", "after-respawn-pane", "pane-exited", "session-closed"]
-
-# printf format typed into the pane; octal escapes keep the typed echo free of
-# the raw bytes, so only the program's output can match EXPECTED.
 PRINTF = r"printf 'PRB<\033]6973;tmuxlog;C;probe;1\007>A<\033]6973;tmuxlog;D;probe;1;0\033\\>B<\033]133;C\007>END\n'"
 EXPECTED = (b"PRB<\x1b]6973;tmuxlog;C;probe;1\x07>A<\x1b]6973;tmuxlog;D;probe;1;0\x1b\\>B<"
             b"\x1b]133;C\x07>END")
 VISIBLE = "PRB<>A<>B<>END"
-
 
 def _wait(pred, timeout=5.0):
     end = time.monotonic() + timeout
@@ -44,7 +21,6 @@ def _wait(pred, timeout=5.0):
             return True
         time.sleep(0.05)
     return pred()
-
 
 def probe(tmux: str = "tmux") -> dict:
     sock = f"tmuxlog-probe-{os.getpid()}"
@@ -68,15 +44,6 @@ def probe(tmux: str = "tmux") -> dict:
         screen = t("capture-pane", "-p", "-t", "probe:0.0").stdout
         result["screen_line"] = next((line for line in screen.splitlines() if "END" in line
                                       and "printf" not in line), None)
-        # The marks are invisible iff the program's OUTPUT line shows the
-        # surrounding text with EMPTY delimiters (PRB<>A<>B<>END) and carries no
-        # mark bytes. We look only at that output line, NOT the whole screen: the
-        # echoed command line legitimately contains the mark text as typed
-        # (\033, 6973, tmuxlog, 133), so scanning the whole screen would always
-        # report a false leak. Layout — a shell-prompt prefix, wrapping, a
-        # trailing cursor — is ignored by matching VISIBLE as a substring with
-        # spaces removed; a real leak would put bytes between the < > delimiters
-        # (so "PRB<>" no longer appears) or leave an ESC on the line.
         line = result["screen_line"] or ""
         result["osc_invisible"] = (
             VISIBLE in line.replace(" ", "")
@@ -101,17 +68,13 @@ def probe(tmux: str = "tmux") -> dict:
     result["boundary"] = "osc" if ok else "sentinel"
     return result
 
-
 def _server(tmux: str, tag: str) -> list[str]:
     return [tmux, "-L", f"tmuxlog-probe-{tag}-{os.getpid()}", "-f", "/dev/null"]
-
 
 def _sh() -> list[str]:
     return ["env", "-i", f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}", "PS1=$ ", "sh"]
 
-
 def probe_session_hooks(tmux: str = "tmux") -> dict:
-    """Do session-scoped after-* hooks fire only for their session, with the new pane's id?"""
     base = _server(tmux, "hooks")
     tmp = Path(tempfile.mkdtemp(prefix="tmuxlog-probe-"))
     log = tmp / "hooks.log"
@@ -154,14 +117,8 @@ def probe_session_hooks(tmux: str = "tmux") -> dict:
         shutil.rmtree(tmp, ignore_errors=True)
     return res
 
-
-# Printable fallback mark: text, then cursor-left over exactly its own width and
-# erase-to-end-of-line, so it is never left on screen (and is safe at the end of
-# PS1, where a carriage return would also erase the prompt).
 SENTINEL = b"@@TMUXLOG;C;probe;1@@"
-# "%s" splits the literal so the echoed command line can never match SENTINEL.
 SENTINEL_PRINTF = r"printf 'S<@@TMUX%sLOG;C;probe;1@@\033[21D\033[K>E\n' ''"
-
 
 def probe_nested(tmux: str = "tmux") -> dict:
     """What an OUTER pipe-pane sees when the marks are printed inside a nested tmux."""
@@ -174,7 +131,6 @@ def probe_nested(tmux: str = "tmux") -> dict:
 
     res = {}
     try:
-        # The inner tmux needs a TERM with terminfo present; "screen" always is.
         run(outer, "start-server", ";", "set", "-g", "default-terminal", "screen", ";",
             "new-session", "-d", "-s", "o", "-x", "120", "-y", "20",
             "env", "-u", "TMUX", *inner, "new-session", "-s", "i", *_sh())
@@ -201,7 +157,6 @@ def probe_nested(tmux: str = "tmux") -> dict:
         subprocess.run(outer + ["kill-server"], capture_output=True)
         shutil.rmtree(tmp, ignore_errors=True)
     return res
-
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="probe tmux for tmuxlog boundary support")
