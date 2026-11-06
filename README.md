@@ -1,21 +1,7 @@
 # tmuxlog
 
-Chronological, per-command log across all
+Chronological, log across all
 panes and windows of a tmux session.
-
-- **One block per command.** Each block is a command plus its full output and
-  metadata: pane, session/window/pane names, start and end timestamps, exit
-  code, cwd, user, host.
-- **No interleaving.** A block only ever holds its own pane's output, so
-  parallel panes never mix inside a block.
-- **Ordered by when you pressed Enter**, not by when output arrived. A long
-  scan started before a quick lookup is listed first, even if the lookup
-  printed first.
-- **Raw bytes are always kept.** An ANSI-stripped `master.clean.log` is written
-  alongside; it differs from the raw log only in escape sequences.
-- **A JSONL event journal** for tooling, plus a sha256 manifest.
-- **Optional AI summary** via Ollama: loopback (`127.0.0.1`) by default, or a host
-  you control (see [Running Ollama on another machine](#running-ollama-on-another-machine-eg-a-gpu-host)).
 
 > **The logs contain everything verbatim**: credentials, keys, tokens, hashes.
 > That is intentional: they are evidence for your private use. tmuxlog does no
@@ -24,67 +10,28 @@ panes and windows of a tmux session.
 
 ## Requirements
 
-- Linux (macOS is untested), Python 3.11+ (standard library only, nothing to `pip install`)
+- Linux (macOS and Windows are untested), Python 3.11+
 - tmux 3.2+ (validated on 3.4 and 3.7c)
 - bash 5+ or zsh 5.1+
 
 ## Install
 
 ```sh
-git clone <this repo> ~/tools/tmuxlog
-ln -s ~/tools/tmuxlog/bin/tmuxlog ~/.local/bin/tmuxlog     # anywhere on PATH
+git clone https://github.com/Quabbeligs-projects/tmuxlog.git ~/tools/tmuxlog
+ln -s ~/tools/tmuxlog/bin/tmuxlog ~/.local/bin/tmuxlog
 ```
 
-Then add one line to the **end** of your `~/.bashrc` or `~/.zshrc`. tmuxlog never edits these files itself:
+Then add one line to the end of your `~/.bashrc` or `~/.zshrc`.
 
 ```sh
 source "$(tmuxlog init-script)"
 ```
 
 The hooks stay inert until `tmuxlog start-session` arms a pane. They cost no
-forks per command and never block or alter a command, even if the log
-directory is unwritable.
+forks per command and never block or alter a command.
 
 Optional: `cp config.example.toml ~/.tmuxlog/config.toml` and edit it. Every key
 is documented there and every key is optional.
-
-## 60-second demo
-
-```sh
-tmuxlog start-session demo        # creates the tmux session if it doesn't exist
-tmux attach -t demo
-```
-
-In the first pane:
-
-```sh
-sleep 3; echo scan-finished       # the "long scan", started first
-```
-
-Within 3 seconds, split (`Ctrl-b %`) and in the new pane:
-
-```sh
-echo quick-result                 # starts second, finishes first
-```
-
-Detach (`Ctrl-b d`), then:
-
-```sh
-tmuxlog status --session demo     # per pane: commands, pipe alive, bytes, gaps
-tmuxlog stop-session demo         # closes the pipes; captures seal themselves
-tmuxlog finalize --session demo
-less -R ~/.tmuxlog/sessions/demo/final/master.log      # or master.clean.log as plain text
-```
-
-`master.log` lists the `sleep 3; echo scan-finished` block *before*
-`echo quick-result`, because it started first. Each block holds only its own
-output.
-
-If Ollama runs locally:
-
-```sh
-tmuxlog analyze --session demo --model mistral    # -> sessions/demo/analysis.md
-```
 
 ## Commands
 
@@ -117,8 +64,7 @@ tmuxlog analyze --session demo --model mistral    # -> sessions/demo/analysis.md
   analysis.md  prompts/        written by analyze
 ```
 
-Everything in `final/` is a pure function of `panes/`. After a crash, a killed
-tmux server or a power cut, just run `tmuxlog finalize` again.
+Everything in `final/` is a pure function of `panes/`.
 
 Block states:
 - **`complete`:** the command finished normally.
@@ -133,20 +79,11 @@ command goes into a **preamble** block.
 
 ## Running Ollama on another machine (e.g. a GPU host)
 
-`analyze` talks to `127.0.0.1:11434` by default. If Ollama runs on another
-machine, there are two ways to reach it. They differ in what crosses the
-network, so pick one deliberately. Remember that the logs contain credentials,
-keys and hashes verbatim, and `analyze` sends the session's clean log to the
-model.
+`analyze` uses `127.0.0.1:11434` by default. If Ollama runs on another
+machine, there are two ways to reach it. Option a is easiest, it’s just direct, plain unencrypted HTTP, use it when you can trust the network.Option b is harder, using an SSH tunnel to encrypt the data, use it when the network isn't fully trusted, or you can't or won't expose Ollama on the host's LAN interface. Remember that the logs contain credentials,
+keys and hashes verbatim, and `analyze` sends the session's clean log to the model.
 
-| | (a) Direct | (b) SSH tunnel |
-|---|---|---|
-| Log data on the LAN | **plain, unencrypted HTTP** | encrypted inside SSH |
-| tmuxlog config | `endpoint` = GPU host, `allow_remote = true` | unchanged (loopback only) |
-| Ollama on the GPU host listens on | the LAN (`OLLAMA_HOST=0.0.0.0:11434`) | loopback only (`127.0.0.1:11434`) |
-| Pick it when | a trusted host on a trusted network, simplest setup | the network isn't fully trusted, or you can't or won't expose Ollama on the host's LAN interface |
-
-### (a) Direct: simplest, but plain HTTP on the LAN
+### (a) Direct
 
 On the GPU host:
 
@@ -169,11 +106,11 @@ allow_remote = true
 
 Every `analyze` run then prints
 `WARNING: sending session data to http://<GPU-HOST-IP>:11434 (allow_remote=on)`.
-Anyone who can sniff that network segment can read the log, and Ollama itself
+Anyone can read the log, and Ollama itself
 has no authentication. Only use this on a host and network you trust, and
 firewall port 11434 on the GPU host to the capture box's address.
 
-### (b) SSH loopback tunnel: keeps strict loopback-only, encrypted
+### (b) SSH loopback tunnel
 
 On the GPU host, leave Ollama on its default loopback address
 (`OLLAMA_HOST` unset, or `127.0.0.1:11434`) and pull the model:
@@ -208,16 +145,14 @@ appears as a single preamble block.
 - Check that the pane is armed: `ls ~/.tmuxlog/run/*/` should contain the
   pane's number. Panes of *other* tmux sessions are not armed; run
   `tmuxlog start-session` for that session too.
-- A pane created before `start-session` arms at its next command. Nothing needs
-  restarting.
+- A pane created before `start-session` arms at its next command.
 - `status` showing `pipe server gone` means the tmux server was restarted. Run
   `tmuxlog start-session <name>` again; old panes stay in the session dir.
 
 ### 2. `start-session` says a pane is "already piped by something else"
 
-tmux allows one `pipe-pane` per pane, and another tool (for example the
-tmux-logging plugin) holds it. tmuxlog does not clobber it. Close that pipe,
-then re-run (`start-session` is idempotent and skips panes it already captures):
+tmux allows one `pipe-pane` per pane, and another tool holds it. tmuxlog does not clobber it.
+Close that pipe, then re-run (`start-session` is idempotent and skips panes it already captures):
 
 ```sh
 tmux pipe-pane -t %3          # no command = close the existing pipe
