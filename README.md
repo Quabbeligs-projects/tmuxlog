@@ -191,37 +191,8 @@ These are captured normally:
 |---|---|
 | `Ollama error: cannot reach Ollama at http://127.0.0.1:11434 after 3 tries` | Start it: `ollama serve`. Retries and timeout are under `[analyze]`. |
 | `Ollama error: HTTP 404 from Ollama: … model "x" not found …` | `ollama pull <model>`, or pass `--model` / set `[analyze] model`. |
-| `refuses a non-loopback endpoint` | By default only `127.0.0.1`, `::1` or `localhost` are accepted. For a GPU host, use an SSH tunnel or `allow_remote` (see [Running Ollama on another machine](#running-ollama-on-another-machine-eg-a-gpu-host)). |
+| `refuses a non-loopback endpoint` | By default only `127.0.0.1`, `::1` or `localhost` are accepted. For a GPU host, use an SSH tunnel or `allow_remote`. |
 | `analyze` is very slow, or seems stuck on one chunk | Run `ollama ps` while it works. Anything other than `100% GPU` (e.g. `45%/55% CPU/GPU`) means `num_ctx` plus the model don't fit in free VRAM and layers spilled to the CPU: lower `[analyze] num_ctx` (8192 is safe on an 8 GB card). Each chunk summary is capped by `num_predict` (default 1024 tokens) and the final reduce at 2048, so a looping model can't generate forever. To watch progress, follow the Ollama server log: `journalctl -u ollama -f` for the Linux service, the terminal running `ollama serve`, or `~/.ollama/logs/server.log` for the desktop app. A climbing `n_gen` means it is still generating, and `tg` t/s is the generation speed. |
-| Analysis looks wrong or ignores parts of the log | Check `prompts/<run>/chunk-NNN.txt`: these are the exact prompts sent, after `collapse_cr` (set `collapse_cr = false` to send progress-bar output uncollapsed). Lower `num_ctx` if the model can't handle 32k; tmuxlog always sends `num_ctx` explicitly and packs whole blocks to fit it. |
+| Analysis looks wrong or ignores parts of the log | Check `prompts/<run>/chunk-NNN.txt` these are the exact prompts sent, after `collapse_cr` (set `collapse_cr = false` to send progress-bar output uncollapsed). Lower `num_ctx` if the model can't handle 32k; tmuxlog always sends `num_ctx` explicitly and packs whole blocks to fit it. |
 
 `analyze` exits non-zero with Ollama's exact error message.
-
-## Known limitations (V1)
-
-- **Nested tmux:** opaque block (see troubleshooting 3).
-- **bash lines that run only in a subshell are not attributed** to a command
-  (output kept, as an orphan block): bare subshells `(cmd)`, `(cmd) &` and async
-  lists/groups `a && b &`, `{ a; b; } &`. Plain `cmd &`, `nohup … &` and
-  `sh -c '…' &` are attributed, as is everything in zsh (see troubleshooting 4).
-- **bash timestamp resolution:** microseconds (`$EPOCHREALTIME`), stored as
-  ns = µs × 1000. zsh records true nanoseconds.
-- **Background output during a foreground command in the same pane:** it lands
-  in the foreground block. A pane is one stream and can't be separated in-band.
-- **Sentinel fallback mode:** a mark that wraps at the right screen edge can
-  leave its tail visible. Content is unaffected.
-
-The design, file formats and every failure mode are documented in
-[docs/DESIGN.md](docs/DESIGN.md).
-
-## Tests
-
-```sh
-pip install pytest            # test-only dependency
-python3 -m pytest tests -v
-```
-
-The suite drives real interactive bash/zsh through a pty and real headless
-tmux servers (`tmux -L …`), using fake data only. It needs `tmux`, `bash` and
-`zsh` on PATH; zsh tests skip if zsh is missing. `analyze` is tested against a
-mock Ollama on loopback.
