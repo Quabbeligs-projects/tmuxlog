@@ -1,46 +1,3 @@
-"""Parse a per-pane ``hooks.rec`` journal into structured records and JSONL events.
-
-``hooks.rec`` is append-only, written only by the shell hooks (docs/DESIGN.md §4).
-Four record types, each terminated by a newline. Space-delimited head fields
-never contain spaces; the ``<len>:<value>`` fields are length-prefixed byte
-counts (written with ``LC_ALL=C ${#v}``) so the value may contain spaces,
-colons and newlines with no escaping. Everything is parsed at the byte level.
-
-    I <nonce> <ts_ns> <pid> <shell> [<shell_version> <shlvl>]
-    S <seq> <ts_ns> <nonce> <shlvl> [<src>] <len>:<cmd> <len>:<cwd> <len>:<user> <len>:<host>
-    T <seq> <ts_ns> <nonce> <part> <len>:<cmd>
-    E <seq> <ts_ns> <nonce> <exit>
-
-``I`` — one per shell instance at init. ``shell_version`` and ``shlvl`` are
-optional so an older hook that writes only the four core fields still parses.
-
-``S`` — command start, the "Enter" moment. ``src`` is an optional provenance
-token (no spaces, no leading digits-then-colon), e.g. where bash got the command
-text: ``bc`` ($BASH_COMMAND), ``hist`` (history), ``px`` (zsh preexec). It is
-distinguished from the first length field by a peek: a length prefix is
-digits-then-colon with no space before the colon.
-
-``T`` — a continuation fragment of the command line identified by the same
-(nonce, seq) as its ``S``: the 2nd, 3rd … simple command of a pipeline or list
-when bash's DEBUG trap fires per stage and history can't recover the whole line
-(the ``ignorespace`` case). ``part`` is the 1-based stage index after the first.
-finalize reconstructs the block's command from the ``S`` text plus its ``T``
-parts in ``part`` order; because the shell operators (| && ;) aren't recoverable
-there, it joins them with a visible separator and flags the block. This parser
-only emits the parts faithfully as ``cmd_part`` events — assembly is finalize's.
-
-A torn trailing record (box died mid-write) stops parsing with a warning rather
-than raising — finalize (§6) relies on that for crash recovery. A structurally
-broken record in the *middle* is skipped to the next newline and parsing
-continues. Unknown record types and unexpected extra fields are warned, not
-fatal: for a logging tool, carrying an unknown field beats dropping a record.
-
-Scope: shell-side I/S/T/E records only. The A/B/C/D OSC boundary marks live in
-``raw.bin`` and are the splitter's job in finalize, not this parser's.
-
-stdlib only (Python 3.11+).
-"""
-
 from __future__ import annotations
 
 import json
@@ -48,19 +5,10 @@ import sys
 from pathlib import Path
 from typing import Iterator
 
-
 class _Torn(Exception):
-    """Ran off the end of the buffer mid-record — expected on crash recovery."""
-
-
 class _Corrupt(Exception):
-    """Structurally invalid record, but there is more data after it."""
 
-
-# ---------------------------------------------------------------------------
 # low-level byte readers
-# ---------------------------------------------------------------------------
-
 def _token(buf: bytes, i: int) -> tuple[bytes, int]:
     """Read a space-delimited token at offset ``i``; return (token, next_offset)."""
     sp = buf.find(b" ", i)
@@ -68,13 +16,7 @@ def _token(buf: bytes, i: int) -> tuple[bytes, int]:
         raise _Torn("eof reading token")
     return buf[i:sp], sp + 1
 
-
 def _peek_is_lenfield(buf: bytes, i: int) -> bool:
-    """True if the next field at ``i`` is a ``<digits>:`` length prefix.
-
-    A length prefix has its colon before the next space and only digits ahead of
-    it. Anything else (a space before the colon, or non-digits) is a bare token.
-    """
     sp = buf.find(b" ", i)
     co = buf.find(b":", i)
     if co == -1:
@@ -82,7 +24,6 @@ def _peek_is_lenfield(buf: bytes, i: int) -> bool:
     if sp != -1 and sp < co:
         return False
     return buf[i:co].isdigit()
-
 
 def _lenfield(buf: bytes, i: int, last: bool) -> tuple[bytes, int]:
     """Read one ``<len>:<value>`` field. ``last`` fields end in \\n, others a space."""
@@ -106,22 +47,17 @@ def _lenfield(buf: bytes, i: int, last: bool) -> tuple[bytes, int]:
         raise _Corrupt(f"expected {expected!r} after length field, got {sep!r}")
     return value, vend + 1
 
-
 def _text(b: bytes) -> str:
     """Decode a byte field, preserving exotic bytes via surrogateescape."""
     return b.decode("utf-8", "surrogateescape")
 
-
-# ---------------------------------------------------------------------------
 # record parsing
-# ---------------------------------------------------------------------------
-
 def _parse_I(buf: bytes, i: int) -> tuple[dict, int]:
     nl = buf.find(b"\n", i)
     if nl == -1:
         raise _Torn("eof reading I record")
     parts = buf[i:nl].split(b" ")
-    got = len(parts) - 1  # minus the type char
+    got = len(parts) - 1 
     if got < 4 or got > 6:
         raise _Corrupt(f"I record has {got} fields, want 4-6")
     rec = {
@@ -136,7 +72,6 @@ def _parse_I(buf: bytes, i: int) -> tuple[dict, int]:
     if got >= 6:
         rec["shlvl"] = _text(parts[6])
     return rec, nl + 1
-
 
 def _parse_E(buf: bytes, i: int) -> tuple[dict, int]:
     nl = buf.find(b"\n", i)
@@ -153,9 +88,8 @@ def _parse_E(buf: bytes, i: int) -> tuple[dict, int]:
         "exit": _text(parts[4]),
     }, nl + 1
 
-
 def _parse_S(buf: bytes, i: int) -> tuple[dict, int]:
-    i += 2  # skip "S "
+    i += 2 
     seq, i = _token(buf, i)
     ts_ns, i = _token(buf, i)
     nonce, i = _token(buf, i)
@@ -182,9 +116,8 @@ def _parse_S(buf: bytes, i: int) -> tuple[dict, int]:
     }
     return rec, i
 
-
 def _parse_T(buf: bytes, i: int) -> tuple[dict, int]:
-    i += 2  # skip "T "
+    i += 2 
     seq, i = _token(buf, i)
     ts_ns, i = _token(buf, i)
     nonce, i = _token(buf, i)
@@ -198,7 +131,6 @@ def _parse_T(buf: bytes, i: int) -> tuple[dict, int]:
         "part": _text(part),
         "cmd": _text(cmd),
     }, i
-
 
 def _parse_one(buf: bytes, i: int) -> tuple[dict, int]:
     t = buf[i:i + 1]
@@ -216,14 +148,7 @@ def _parse_one(buf: bytes, i: int) -> tuple[dict, int]:
         return _parse_I(buf, i)
     raise _Corrupt(f"unknown record type {t!r}")
 
-
 def parse(buf: bytes) -> tuple[list[dict], list[dict]]:
-    """Parse a whole ``hooks.rec`` buffer.
-
-    Returns ``(records, warnings)``. ``records`` is the list of I/S/T/E dicts in
-    file order; ``warnings`` lists any torn/corrupt spans with byte offsets, so
-    the manifest can record them (§9).
-    """
     records: list[dict] = []
     warnings: list[dict] = []
     i, n = 0, len(buf)
@@ -248,26 +173,14 @@ def parse(buf: bytes) -> tuple[list[dict], list[dict]]:
         records.append(rec)
     return records, warnings
 
-
-# ---------------------------------------------------------------------------
 # event emission
-# ---------------------------------------------------------------------------
-
 def _int(s: str) -> int:
     return int(s)
 
-
 def _safe(s: str) -> str:
-    """Make a surrogateescape string safe to JSON-encode with ensure_ascii=False.
-
-    Authoritative bytes always live in hooks.rec (hashed in the manifest); the
-    rare non-UTF-8 byte becomes U+FFFD here so events.jsonl stays valid JSON.
-    """
     return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
-
 def to_events(records: list[dict]) -> Iterator[dict]:
-    """Translate parsed records into events.jsonl event dicts, in file order."""
     for r in records:
         t = r["type"]
         if t == "I":
@@ -316,35 +229,25 @@ def to_events(records: list[dict]) -> Iterator[dict]:
                 "exit": _int(r["exit"]),
             }
 
-
 def events_from_file(path: str | Path) -> tuple[list[dict], list[dict]]:
-    """Read a hooks.rec file and return (events, warnings)."""
     buf = Path(path).read_bytes()
     records, warnings = parse(buf)
     return list(to_events(records)), warnings
-
 
 def write_jsonl(events: Iterator[dict], out) -> None:
     for ev in events:
         out.write(json.dumps(ev, ensure_ascii=False, sort_keys=False))
         out.write("\n")
 
-
-# ---------------------------------------------------------------------------
 # CLI + self-test
-# ---------------------------------------------------------------------------
-
 def _selftest() -> int:
-    # New format: 6-field I, S with a src token, a T continuation (pipeline
-    # stage), a command with embedded spaces/colons/newlines (heredoc), its E.
-    # Also an old-format S (no src) to prove back-compat, and a torn final rec.
     new = (
         b"I abc123 1700000000000000000 4242 bash 5.2.15 1\n"
         b"S 1 1700000000111111000 abc123 1 bc "
         b"32:cat <<EOF\nline: with: colons\nEOF 5:/root 4:root 3:kal\n"
-        b"T 1 1700000000111222000 abc123 1 3:cat\n"       # 2nd stage of the pipe
+        b"T 1 1700000000111222000 abc123 1 3:cat\n"
         b"E 1 1700000000222222000 abc123 0\n"
-        b"S 2 1700000000333333000 abc123 1 10: nmap -sV  5:/root 4:root 3:kal\n"  # old-style, no src
+        b"S 2 1700000000333333000 abc123 1 10: nmap -sV  5:/root 4:root 3:kal\n"
         b"E 2 1700000000444444000 abc123 0\n"
     )
     torn = b"S 3 1700000000555555000 abc123 1 bc 99:too short"
@@ -359,11 +262,10 @@ def _selftest() -> int:
     assert evs[1]["src"] == "bc"
     assert evs[1]["cmd"] == "cat <<EOF\nline: with: colons\nEOF"
     assert evs[2]["event"] == "cmd_part" and evs[2]["part"] == 1 and evs[2]["cmd"] == "cat"
-    assert evs[4]["cmd"] == " nmap -sV " and "src" not in evs[4]  # leading space kept, no src
+    assert evs[4]["cmd"] == " nmap -sV " and "src" not in evs[4]
     assert evs[5]["exit"] == 0
     print("selftest OK:", len(records), "records,", len(warnings), "warning(s)")
     return 0
-
 
 def main(argv: list[str]) -> int:
     if not argv or argv[0] in ("-h", "--help"):
@@ -376,7 +278,7 @@ def main(argv: list[str]) -> int:
     write_jsonl(iter(events), sys.stdout)
     for w in warnings:
         print("warning:", json.dumps(w), file=sys.stderr)
-    return 0  # a torn last line is normal, not a failure
+    return 0
 
 
 if __name__ == "__main__":
