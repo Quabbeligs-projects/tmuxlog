@@ -38,16 +38,16 @@ is documented there and every key is optional.
 
 | Command | What it does |
 |---|---|
-| `start-session [<name>]` | Arms every pane of tmux session `<name>`, creating it detached if needed; inside tmux with no name, arms the current session. Probes tmux once per version to pick the boundary mode. Installs session-scoped hooks, so new windows and splits are armed too. Idempotent. |
+| `start-session <name>` | Arms every pane of tmux session `<name>`, creating it detached if needed; inside tmux with no name, arms the current session. Probes tmux once per version to pick the boundary mode. Installs session-scoped hooks, so new windows and splits are armed too. Idempotent. |
 | `stop-session <name>` | Removes the hooks, closes the pipes (each capture seals its pane) and disarms the shells. |
-| `status [--session]` | Per pane: shells, commands, open commands, pipe `alive` / `sealed` / `server gone`, raw bytes, capture gaps. |
-| `finalize [--session]` | Writes `final/master.log`, `master.clean.log`, `events.jsonl` and `manifest.json`, ordered by command start. Safe to re-run at any time; output is replaced atomically. |
-| `analyze [--session] [--model] [--include-raw]` | Local Ollama map/reduce over the finalized blocks, written to `analysis.md`. Every prompt is saved under `prompts/<run>/`. By default (`[analyze] collapse_cr = true`) carriage-return/backspace overwrites such as progress bars are collapsed **in the model input only**; `raw.bin` and the master logs are never altered. `--include-raw` appends the raw blocks, escapes preserved. |
-| `export --format jsonl [--session]` | Every pane's hook events in timestamp order, on stdout. |
+| `status --session` | Per pane: shells, commands, open commands, pipe `alive` / `sealed` / `server gone`, raw bytes, capture gaps. |
+| `finalize --session <name>` | Writes `final/master.log`, `master.clean.log`, `events.jsonl` and `manifest.json`, ordered by command start. Safe to re-run at any time; output is replaced atomically. |
+| `analyze --session <name> --model --include-raw` | Local Ollama map/reduce over the finalized blocks, written to `analysis.md`. Every prompt is saved under `prompts/<run>/`. By default (`[analyze] collapse_cr = true`) carriage-return/backspace overwrites such as progress bars are collapsed **in the model input only**; `raw.bin` and the master logs are never altered. `--include-raw` appends the raw blocks, escapes preserved. |
+| `export --format jsonl --session <name>` | Every pane's hook events in timestamp order, on stdout. |
 | `events <pane dir>` | Writes one pane's `events.jsonl`. |
 | `init-script` | Prints the path to source from your rc file. |
 
-`--session` defaults to the most recently modified session.
+`--session` without `<name>` behind it defaults to the most recently modified session.
 
 ## What ends up where
 
