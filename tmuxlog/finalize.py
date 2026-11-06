@@ -1,29 +1,3 @@
-"""Finalize a session: merge every pane's blocks into the ordered master log.
-
-A pure function of the pane files (via split.split), run at session end or on
-demand. It gathers all panes' blocks, orders them by command START timestamp
-(not output arrival), and writes, under final/:
-
-  master.log         raw block bodies, each between a header and footer
-  master.clean.log   the same, ANSI-stripped (differs from raw only in escapes)
-  events.jsonl       the hook events (cmd_start/cmd_part/cmd_end), then one
-                     block record per block, in final order
-  manifest.json      sha256 of every block (raw and clean) and of every final
-                     file, byte counts, truncation, and the capture gaps
-                     surfaced loudly
-
-Ordering is (start_ns, numeric pane id, session name); a block with no start
-timestamp (a preamble, or an orphan with no arrival record) falls back to the
-pane's created_ns then 0, so ordering is always total and stable. Each block's
-sha256 is of its FULL body; truncation (default 100 MB/block, master files
-only) keeps head+tail with an explicit marker and never changes the hash.
-
-Writes go to temp files and are renamed into place, so a crash mid-finalize
-leaves the previous output intact.
-
-stdlib only; uses tmuxlog.split, tmuxlog.journal, tmuxlog.ansi, tmuxlog.capture.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -34,18 +8,15 @@ from pathlib import Path
 
 from tmuxlog import ansi, capture, journal, split
 
-CAP_DEFAULT = 100 * 1024 * 1024   # 100 MB per block in the master files
-
+CAP_DEFAULT = 100 * 1024 * 1024
 
 def _sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
-
 
 def _iso(ns) -> str:
     if ns is None:
         return "-"
     return datetime.fromtimestamp(ns / 1e9, timezone.utc).isoformat()
-
 
 def _sort_key(b: dict):
     ns = b["start_ns"]
@@ -57,7 +28,6 @@ def _sort_key(b: dict):
         pane_num = 0
     return (ns, pane_num, b["_meta"].get("session", ""))
 
-
 def _truncate(body: bytes, cap: int, uid: str, offsets, sha: str) -> tuple[bytes, bool]:
     if len(body) <= cap:
         return body, False
@@ -66,7 +36,6 @@ def _truncate(body: bytes, cap: int, uid: str, offsets, sha: str) -> tuple[bytes
     marker = (f"\n[tmuxlog: TRUNCATED — showing {2 * half} of {len(body)} bytes; "
               f"full block = panes/{uid}/raw.bin [{a},{b}) sha256={sha}]\n").encode()
     return body[:half] + marker + body[-half:], True
-
 
 def _header(bid: int, b: dict, sha_raw: str) -> bytes:
     m = b["_meta"]
@@ -90,12 +59,10 @@ def _header(bid: int, b: dict, sha_raw: str) -> bytes:
                      f"end={_iso(b['end_ns'])} ({b['end_ns']})")
     lines.append(f"sha256(raw)={sha_raw}  bytes={b['bytes_total']}")
     lines.append("----- output -----")
-    return ("\n".join(lines) + "\n").encode("utf-8", "surrogateescape")
-
+    return ("\n".join(lines) + "\n").encode("utf-8", "surrogateescape"
 
 def _footer(bid: int) -> bytes:
     return f"===== END BLOCK {bid} =====\n\n".encode()
-
 
 def _atomic_write(path: Path, data: bytes) -> None:
     tmp = path.with_name(path.name + ".tmp")
@@ -103,22 +70,14 @@ def _atomic_write(path: Path, data: bytes) -> None:
     try:
         mv = memoryview(data)
         off = 0
-        while off < len(mv):                    # os.write may short-write; Linux
-            off += os.write(fd, mv[off:])        # caps one write near 2 GiB
+        while off < len(mv):                    
+            off += os.write(fd, mv[off:])      
         os.fsync(fd)
     finally:
         os.close(fd)
     os.replace(tmp, path)
 
-
 def collect_blocks(session_dir) -> dict:
-    """Gather every pane's blocks (with raw/clean bodies + metadata), sorted.
-
-    Shared by finalize and analyze so both see the same block objects, rather
-    than re-parsing master.clean.log (whose delimiter lines could collide with
-    command output). Returns {"blocks", "events", "gaps", "warnings"}; each block
-    carries _pane and _meta.
-    """
     session_dir = Path(session_dir)
     panes_dir = session_dir / "panes"
     blocks, events, gaps, warnings = [], [], [], []
@@ -145,7 +104,6 @@ def collect_blocks(session_dir) -> dict:
     blocks.sort(key=_sort_key)
     events.sort(key=lambda e: (e.get("ts_ns", 0), e.get("pane", "")))
     return {"blocks": blocks, "events": events, "gaps": gaps, "warnings": warnings}
-
 
 def finalize(session_dir, cap_bytes: int = CAP_DEFAULT) -> dict:
     session_dir = Path(session_dir)
@@ -192,10 +150,6 @@ def finalize(session_dir, cap_bytes: int = CAP_DEFAULT) -> dict:
     except OSError:
         pass
 
-    # master.clean.log IS ansi.strip(master.log) by construction, so the §5
-    # invariant (clean differs from raw only in escapes) holds unconditionally —
-    # headers, footers and truncation markers carry no escapes, so they survive
-    # the strip identically.
     master_bytes = bytes(master)
     clean_bytes = ansi.strip(master_bytes)
     events_bytes = events_text.encode("utf-8", "surrogateescape")
