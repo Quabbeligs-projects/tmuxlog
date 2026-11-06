@@ -1,5 +1,3 @@
-"""tmuxlog: chronological, per-command evidence logs for tmux sessions."""
-
 import sys
 
 if sys.version_info < (3, 11):
