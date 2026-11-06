@@ -1,9 +1,3 @@
-"""tmuxlog command line.
-
-Commands: init-script, events, status, start-session, stop-session, finalize,
-analyze, export --format jsonl; capture and arm-new are internal (run by tmux).
-"""
-
 import argparse
 import io
 import json
@@ -15,13 +9,11 @@ from pathlib import Path
 
 from tmuxlog import __version__, config, journal, paths
 
-
 def _pane_dirs(session: Path) -> list[Path]:
     panes = session / "panes"
     if not panes.is_dir():
         return []
     return sorted(p for p in panes.iterdir() if (p / "hooks.rec").is_file())
-
 
 def _resolve_session(cfg: dict, name: str | None) -> Path:
     root = Path(cfg["paths"]["root"])
@@ -33,10 +25,8 @@ def _resolve_session(cfg: dict, name: str | None) -> Path:
         raise SystemExit(f"tmuxlog: no sessions under {sessions}")
     return candidates[-1]
 
-
 def _resolve_hooks_rec(target: Path) -> Path:
     return target / "hooks.rec" if target.is_dir() else target
-
 
 def _open_commands(events: list[dict]) -> list[dict]:
     started = {}
@@ -48,9 +38,7 @@ def _open_commands(events: list[dict]) -> list[dict]:
             started.pop(key, None)
     return list(started.values())
 
-
 def session_events(session: Path) -> tuple[list[dict], list[dict]]:
-    """All panes' events, each tagged with its pane, ordered by ts_ns then pane."""
     events, warnings = [], []
     for pane in _pane_dirs(session):
         evs, warns = journal.events_from_file(pane / "hooks.rec")
@@ -59,14 +47,11 @@ def session_events(session: Path) -> tuple[list[dict], list[dict]]:
     events.sort(key=lambda ev: (ev["ts_ns"], ev["pane"]))
     return events, warnings
 
-
 def cmd_init_script(args, cfg) -> int:
     print(paths.INIT_SCRIPT)
     return 0
 
-
 def cmd_events(args, cfg) -> int:
-    """Write a pane's events.jsonl next to its hooks.rec (or to stdout with -o -)."""
     rec = _resolve_hooks_rec(Path(args.target))
     events, warnings = journal.events_from_file(rec)
     for w in warnings:
@@ -81,9 +66,7 @@ def cmd_events(args, cfg) -> int:
     print(out)
     return 0
 
-
 def _tmux_pipes() -> tuple[int | None, dict[str, bool]]:
-    """(server pid, {pane_id: piped}) of the default tmux server, or (None, {})."""
     try:
         pid = subprocess.run(["tmux", "display-message", "-p", "#{pid}"],
                              capture_output=True, text=True, timeout=5)
@@ -99,13 +82,11 @@ def _tmux_pipes() -> tuple[int | None, dict[str, bool]]:
         piped[pane_id] = flag == "1"
     return int(pid.stdout.strip()), piped
 
-
 def _read_json(path: Path) -> dict:
     try:
         return json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
-
 
 def cmd_status(args, cfg) -> int:
     from tmuxlog import capture
@@ -150,14 +131,12 @@ def cmd_status(args, cfg) -> int:
             print(f"    open: seq {ev['seq']} {first}")
     return 0
 
-
 def cmd_capture(args, cfg) -> int:
     from tmuxlog import capture
     return capture.run(Path(args.pane_dir))
 
 
 def _boundary_for(cfg) -> str:
-    """config `capture.boundary`, or for "auto" the probe result cached per tmux version."""
     from tmuxlog import probe
     mode = cfg["capture"].get("boundary", "auto")
     if mode in ("osc", "sentinel"):
@@ -178,7 +157,6 @@ def _boundary_for(cfg) -> str:
         paths.write_private_atomic(cache, (json.dumps(cached, indent=2) + "\n").encode())
     return cached[version]["boundary"]
 
-
 def cmd_start_session(args, cfg) -> int:
     from tmuxlog import session
     res = session.start_session(args.name, cfg, boundary=args.boundary or _boundary_for(cfg))
@@ -192,12 +170,10 @@ def cmd_start_session(args, cfg) -> int:
         print(f"  created detached session; attach with: tmux attach -t {res['session']}")
     return 0
 
-
 def cmd_arm_new(args, cfg) -> int:
     from tmuxlog import session
     session.arm_new(args.session, cfg)
     return 0
-
 
 def cmd_stop_session(args, cfg) -> int:
     from tmuxlog import session
@@ -205,7 +181,6 @@ def cmd_stop_session(args, cfg) -> int:
     print(f"tmuxlog: stopped {res['session']}: closed {res['pipes_closed']} pipe(s), "
           f"removed {res['pointers_removed']} pointer(s)")
     return 0
-
 
 def cmd_finalize(args, cfg) -> int:
     from tmuxlog import finalize
@@ -219,13 +194,9 @@ def cmd_finalize(args, cfg) -> int:
         print(f"  {res['warnings']} warning(s) recorded in manifest.json")
     return 0
 
-
 def cmd_analyze(args, cfg) -> int:
     from tmuxlog import analyze
     a = cfg["analyze"]
-    # analyze.py keeps the chunk reserves as module settings; apply the config.
-    # The response reserve must hold the longest reply allowed (map num_predict
-    # or the reduce cap), or a full-length reply would overflow num_ctx.
     num_predict = int(a["num_predict"])
     analyze.PROMPT_RESERVE = int(a["prompt_reserve_tokens"])
     analyze.RESPONSE_RESERVE = max(int(a["response_reserve_tokens"]), num_predict,
@@ -246,15 +217,14 @@ def cmd_analyze(args, cfg) -> int:
         res = analyze.analyze(session, client, include_raw=args.include_raw,
                               collapse=bool(a["collapse_cr"]),
                               progress=lambda msg: print(f"tmuxlog: {msg}", file=sys.stderr, flush=True))
-    except ValueError as e:                    # non-loopback endpoint, num_ctx too small
+    except ValueError as e:                   
         raise SystemExit(f"tmuxlog: {e}")
-    except analyze.OllamaError as e:           # exact Ollama error, non-zero exit
+    except analyze.OllamaError as e:           
         raise SystemExit(f"tmuxlog: Ollama error: {e}")
     print(f"tmuxlog: analysis of {session.name} ({res['blocks']} block(s), {res['chunks']} chunk(s), "
           f"model {client.model}) -> {res['analysis']}")
     print(f"  prompts saved under {res['prompts_dir']}")
     return 0
-
 
 def cmd_export(args, cfg) -> int:
     if args.format != "jsonl":
@@ -264,7 +234,6 @@ def cmd_export(args, cfg) -> int:
         print("tmuxlog: warning:", json.dumps(w), file=sys.stderr)
     journal.write_jsonl(iter(events), sys.stdout)
     return 0
-
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tmuxlog", description=__doc__.splitlines()[0])
@@ -316,7 +285,6 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--session", help="session name (default: most recently modified)")
     s.set_defaults(func=cmd_export)
     return p
-
 
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
