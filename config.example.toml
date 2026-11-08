@@ -1,0 +1,68 @@
+[paths]
+# All state lives here (dirs 0700, files 0600). Logs contain secrets verbatim.
+root = "~/.tmuxlog"
+
+[capture]
+# Boundary marks: "auto" (OSC self-test, sentinel fallback), "osc", "sentinel".
+boundary = "auto"
+# Per-block cap for master.log / master.clean.log only; raw.bin is never truncated.
+max_block_bytes = 104857600
+# Output after a command ends is split into orphan blocks at gaps longer than this.
+orphan_gap_ms = 500
+# Launcher tmux uses to run tmuxlog (pipe-pane capture, arm-new hook). Default:
+# this Python running the package from where it is installed. Example:
+# cmd = "/usr/local/bin/tmuxlog"
+# Commands tagged `interactive: true` in block metadata.
+interactive = [
+  "ssh", "telnet", "nc", "ncat", "socat", "msfconsole", "evil-winrm",
+  "mysql", "psql", "sqlplus", "smbclient", "ftp", "python", "python3",
+  "ipython", "vim", "nvim", "vi", "nano", "less", "man", "top", "htop",
+  "watch", "tmux", "screen", "bash", "zsh", "sh",
+]
+
+[finalize]
+# Per-block cap in master.log / master.clean.log (head + tail kept, explicit
+# marker; block sha256 is always of the full body). Defaults to
+# capture.max_block_bytes.
+# cap_bytes = 104857600
+
+[tmux]
+# tmux 3.x has no pane-created or after-respawn-pane hook (probed on 3.4 and
+# 3.7c); respawn-pane -k keeps the existing pipe, so none is needed.
+hooks = ["after-new-session", "after-new-window", "after-split-window"]
+
+[analyze]
+# Ollama endpoint. By default it must be loopback (127.0.0.1, ::1, localhost).
+endpoint = "http://127.0.0.1:11434"
+# Set to true to allow a non-loopback endpoint, e.g. "http://192.0.2.50:11434"
+# on your own GPU host. WARNING: the logs contain credentials, keys and hashes
+# verbatim, and the session's clean log is sent to that host over plain HTTP.
+# Only enable this for a host AND a network you trust; otherwise keep it false
+# and use an SSH tunnel to 127.0.0.1 instead (see README).
+allow_remote = false
+# Overridden per run by `tmuxlog analyze --model`.
+model = "mistral"
+# Sent explicitly with every request (Ollama's own default is much smaller)
+# It must fit in the GPU's FREE VRAM together with the model. If it doesn't,
+# Ollama spills layers to the CPU and slows. 8192 is a safe value for an 8 GB
+# card, use 32768 only with plenty of VRAM, or for CPU-only runs. While analyze
+# runs, `ollama ps` should show "100% GPU" for the model; any CPU share
+# (e.g. "45%/55% CPU/GPU") means: lower num_ctx.
+num_ctx = 32768
+# Tokens kept free in each request for the prompt scaffolding and the reply;
+# whole blocks are packed into num_ctx minus these (estimate: 3 bytes/token).
+prompt_reserve_tokens = 1024
+response_reserve_tokens = 2048
+# Maximum length (tokens) of each chunk summary, sent as num_predict on every
+# map request. It caps the reply so a model that starts looping cannot generate
+# thousands of tokens for one chunk. The final reduce allows up to 2048. The
+# response reserve is raised automatically if it is smaller than either.
+num_predict = 1024
+# Connection-error retries (with backoff) and per-request timeout.
+retries = 3
+timeout_s = 600
+# Collapse carriage-return/backspace overwrites (progress bars) in the text sent
+# to the model only, so a gobuster/hydra progress line costs one line, not
+# thousands. Never applied to raw.bin, master.log or master.clean.log; the
+# collapsed text is what lands in prompts/, so it stays reproducible.
+collapse_cr = true
