@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+sessions/
+**/sessions/
+test-output/
+.test-output/
+*.tmp
+.pytest_cache/
