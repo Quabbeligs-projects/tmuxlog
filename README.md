@@ -20,6 +20,10 @@ But I recommend just analyzing the logs on your own.
 > That is intentional, they are evidence for your private use. tmuxlog does no
 > redaction. All state is created `0700` (dirs) / `0600` (files) under
 > `~/.tmuxlog/`. Keep it off shared or synced storage.
+>
+> You‘re welcome to look at my code, just wanted to warn you that I didnt really comment at all,
+> the `analyze` feature has the most amount of comments because it was made with claude code.
+> Good luck trying to understand my mess without comments.
 
 ## Requirements
 
