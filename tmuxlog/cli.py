@@ -201,8 +201,16 @@ def cmd_start_session(args, cfg):
     return 0
 
 
-def cmd_finalize(args, cfg):
+def load_finalize(cfg):
     from tmuxlog import finalize
+    c = cfg["capture"]
+    finalize.ORPHAN_GAP_MS = int(c.get("orphan_gap_ms", finalize.ORPHAN_GAP_MS))
+    finalize.INTERACTIVE = list(c.get("interactive", finalize.INTERACTIVE))
+    return finalize
+
+
+def cmd_finalize(args, cfg):
+    finalize = load_finalize(cfg)
     session = _resolve_session(cfg, args.session)
     cap = cfg.get("finalize", {}).get("cap_bytes") or cfg["capture"]["max_block_bytes"]
     res = finalize.finalize(session, cap_bytes=int(cap))
@@ -216,6 +224,7 @@ def cmd_finalize(args, cfg):
 
 def cmd_analyze(args, cfg):
     from tmuxlog import analyze
+    load_finalize(cfg)
     a = cfg["analyze"]
     num_predict = int(a["num_predict"])
     analyze.PROMPT_RESERVE = int(a["prompt_reserve_tokens"])
