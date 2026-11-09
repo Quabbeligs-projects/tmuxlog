@@ -3,7 +3,7 @@ from __future__ import annotations
 ESC = 0x1B
 BEL = 0x07
 
-_STRING_INTRODUCERS = frozenset(b"]P X^_".replace(b" ", b""))  # ] P X ^ _
+_STRING_INTRODUCERS = frozenset(b"]P X^_".replace(b" ", b""))
 
 def strip(data: bytes) -> bytes:
     out = bytearray()
@@ -20,7 +20,7 @@ def strip(data: bytes) -> bytes:
             break
         c = data[j]
 
-        if c == 0x5B:  # '[' — CSI
+        if c == 0x5B:
             j += 1
             while j < n and 0x20 <= data[j] <= 0x3F:
                 j += 1
@@ -29,27 +29,28 @@ def strip(data: bytes) -> bytes:
             i = j
             continue
 
-        if c in _STRING_INTRODUCERS: 
+        if c in _STRING_INTRODUCERS:
             j += 1
             while j < n:
                 if data[j] == BEL:
                     j += 1
                     break
-                if data[j] == ESC and j + 1 < n and data[j + 1] == 0x5C: 
+                if data[j] == ESC and j + 1 < n and data[j + 1] == 0x5C:
                     j += 2
                     break
                 j += 1
             i = j
             continue
-          
+
         k = i + 1
         while k < n and 0x20 <= data[k] <= 0x2F:
             k += 1
         if k < n and 0x30 <= data[k] <= 0x7E:
             i = k + 1
         else:
-            i += 1 
+            i += 1
     return bytes(out)
 
 def strip_text(s: str) -> str:
+    """Convenience: strip escapes from a str, preserving exotic bytes round-trip."""
     return strip(s.encode("utf-8", "surrogateescape")).decode("utf-8", "surrogateescape")
