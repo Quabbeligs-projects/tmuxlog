@@ -9,6 +9,7 @@ from pathlib import Path
 
 HOOKS = ["pane-created", "after-new-session", "after-new-window",
          "after-split-window", "after-respawn-pane", "pane-exited", "session-closed"]
+
 PRINTF = r"printf 'PRB<\033]6973;tmuxlog;C;probe;1\007>A<\033]6973;tmuxlog;D;probe;1;0\033\\>B<\033]133;C\007>END\n'"
 EXPECTED = (b"PRB<\x1b]6973;tmuxlog;C;probe;1\x07>A<\x1b]6973;tmuxlog;D;probe;1;0\x1b\\>B<"
             b"\x1b]133;C\x07>END")
@@ -75,6 +76,7 @@ def _sh() -> list[str]:
     return ["env", "-i", f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}", "PS1=$ ", "sh"]
 
 def probe_session_hooks(tmux: str = "tmux") -> dict:
+    """Do session-scoped after-* hooks fire only for their session, with the new pane's id?"""
     base = _server(tmux, "hooks")
     tmp = Path(tempfile.mkdtemp(prefix="tmuxlog-probe-"))
     log = tmp / "hooks.log"
@@ -170,7 +172,6 @@ def main(argv=None) -> int:
         result["nested"] = probe_nested(args.tmux)
     print(json.dumps(result, indent=2))
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
