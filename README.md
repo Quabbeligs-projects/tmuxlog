@@ -28,7 +28,7 @@ But I recommend just analyzing the logs on your own.
 ## Requirements
 
 - Linux (macOS and Windows are untested), Python 3.11+
-- tmux 3.2+ (validated on 3.4 and 3.7c)
+- tmux 3.2+ (tested on 3.4 and 3.7c)
 - bash 5+ or zsh 5.1+
 
 ## Install
@@ -175,69 +175,3 @@ stays loopback-only. The log crosses the network only inside the SSH
 connection. Close the tunnel afterwards with
 `pkill -f 'ssh -f -N -L 127.0.0.1:11434'`, or keep it up with your usual SSH
 config (`LocalForward 127.0.0.1:11434 127.0.0.1:11434`).
-
-## Troubleshooting
-
-### 1. Commands in a pane are not logged (unarmed shell)
-
-Symptoms: `status` shows `0 shell(s)` for the pane, or the pane's whole output
-appears as a single preamble block.
-
-- Check that the shell sourced the hooks: `type __tl_preexec` must print a
-  function. If it doesn't, the `source "$(tmuxlog init-script)"` line is missing
-  or not at the end of your rc file. On bash it also must be 5.0 or newer
-  (`echo $BASH_VERSION`).
-- Check that the pane is armed: `ls ~/.tmuxlog/run/*/` should contain the
-  pane's number. Panes of *other* tmux sessions are not armed; run
-  `tmuxlog start-session` for that session too.
-- A pane created before `start-session` arms at its next command.
-- `status` showing `pipe server gone` means the tmux server was restarted. Run
-  `tmuxlog start-session <name>` again; old panes stay in the session dir.
-
-### 2. `start-session` says a pane is "already piped by something else"
-
-tmux allows one `pipe-pane` per pane, and another tool holds it. tmuxlog does not clobber it.
-Close that pipe, then re-run (`start-session` is idempotent and skips panes it already captures):
-
-```sh
-tmux pipe-pane -t %3          # no command = close the existing pipe
-tmuxlog start-session <name>
-```
-
-### 3. Everything inside a nested tmux is one big block
-
-This is a known limitation. Shells inside a nested tmux belong to the inner
-server, so the outer tmuxlog never arms them, and the inner tmux swallows
-boundary marks anyway. The whole inner session is logged as one opaque block
-(raw bytes kept), sealed `still_running` until it exits. To get per-command
-blocks, run `tmuxlog start-session` on the inner server as well; it gets its own
-session directory.
-
-### 4. bash: a background command's output is an orphan with no command
-
-This is a known limitation of bash. Its DEBUG trap does not fire for lines that
-run *only* in a subshell:
-- `(cmd)` and `(cmd) &`
-- async lists `a && b &`
-- async groups `{ a; b; } &`
-
-These commands get no block of their own. Their output is still preserved, in
-an orphan block, but it isn't attributed to the command.
-
-These are captured normally:
-- plain background commands (`cmd &`, `nohup cmd &`)
-- `sh -c '…' &`
-- pipelines, `if`/`for`/`{ }`
-- everything in zsh
-
-### 5. `analyze` fails (Ollama down, wrong model, odd output)
-
-| Message | Fix |
-|---|---|
-| `Ollama error: cannot reach Ollama at http://127.0.0.1:11434 after 3 tries` | Ollama isn't reachable. Start it with `ollama serve`, or re-open the SSH tunnel if it runs on another host. |
-| `Ollama error: HTTP 404 from Ollama: … model "x" not found …` | `ollama pull <model>`, or pass `--model` / set `[analyze] model`. |
-| `refuses a non-loopback endpoint` | By default only `127.0.0.1`, `::1` or `localhost` are accepted. For a GPU host, use an SSH tunnel or `allow_remote`. |
-| `analyze` is very slow, or seems stuck on one chunk | Run `ollama ps` while it works. Anything other than `100% GPU` (e.g. `45%/55% CPU/GPU`) means `num_ctx` plus the model don't fit in free VRAM and layers spilled to the CPU: lower `[analyze] num_ctx` (8192 is safe on an 8 GB card). Each chunk summary is capped by `num_predict` (default 1024 tokens) and the final reduce at 2048, so a looping model can't generate forever. To watch progress, follow the Ollama server log: `journalctl -u ollama -f` for the Linux service, the terminal running `ollama serve`, or `~/.ollama/logs/server.log` for the desktop app. A climbing `n_gen` means it is still generating, and `tg` t/s is the generation speed. |
-| Analysis looks wrong or ignores parts of the log | Check `prompts/<run>/chunk-NNN.txt` — these are the exact prompts sent, after `collapse_cr` (set `collapse_cr = false` to send progress-bar output uncollapsed). Lower `num_ctx` if the model can't handle 32k; tmuxlog always sends `num_ctx` explicitly and packs whole blocks to fit it. |
-
-`analyze` exits non-zero with Ollama's exact error message.
