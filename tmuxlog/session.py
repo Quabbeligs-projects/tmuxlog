@@ -172,11 +172,17 @@ def start_session(name, cfg, tmux=None, boundary="osc"):
         results.append(arm_pane(p, sdir, root, server_pid, boundary, tmux, cfg))
 
     me = _launcher(cfg) + " arm-new --session " + shlex.quote(name)
-    for hook in NEW_PANE_HOOKS:
-        tmux.set_hook(name, hook, "run-shell " + shlex.quote(me))
+    hooks = []
+    for hook in cfg.get("tmux", {}).get("hooks") or NEW_PANE_HOOKS:
+        try:
+            tmux.set_hook(name, hook, "run-shell " + shlex.quote(me))
+        except subprocess.CalledProcessError as e:
+            print(f"tmuxlog: couldn't set hook {hook}: {(e.stderr or '').strip()}", file=sys.stderr)
+            continue
+        hooks.append(hook)
 
     info = {"name": name, "server_pid": server_pid, "created_ns": time.time_ns(),
-            "boundary": boundary, "hooks": list(NEW_PANE_HOOKS), "created_session": created}
+            "boundary": boundary, "hooks": hooks, "created_session": created}
     paths.write_private_atomic(sdir / "session.json", (json.dumps(info) + "\n").encode())
     return {"session": name, "dir": str(sdir), "created": created, "boundary": boundary, "panes": results}
 
@@ -203,21 +209,38 @@ def arm_new(name, cfg, tmux=None):
 def stop_session(name, cfg, tmux=None):
     tmux = tmux or Tmux()
     root = Path(cfg["paths"]["root"])
-    for hook in NEW_PANE_HOOKS:
+    sdir = root / "sessions" / name
+
+    hooks = set(NEW_PANE_HOOKS) | set(cfg.get("tmux", {}).get("hooks") or [])
+    if (sdir / "session.json").exists():
+        try:
+            hooks |= set(json.loads((sdir / "session.json").read_text()).get("hooks", []))
+        except (OSError, ValueError):
+            pass
+    for hook in sorted(hooks):
         tmux.unset_hook(name, hook)
+
     panes = []
     if tmux.has_session(name):
         panes = tmux.list_panes(name)
     for p in panes:
         tmux.pipe_pane_off(p["pane_id"])
+
     removed = 0
-    try:
-        run_dir = root / "run" / str(tmux.server_pid())
-        for p in panes:
-            ptr = run_dir / p["pane_id"].lstrip("%")
-            if ptr.exists():
-                ptr.unlink()
-                removed += 1
-    except (subprocess.CalledProcessError, ValueError):
-        pass
+    mine = sdir / "panes"
+    run = root / "run"
+    if run.is_dir():
+        for d in run.iterdir():
+            if not d.is_dir():
+                continue
+            for ptr in d.iterdir():
+                try:
+                    target = Path(ptr.read_text().strip())
+                except OSError:
+                    continue
+                if target.parent == mine:
+                    ptr.unlink()
+                    removed += 1
+            if d.name.isdigit() and not _pid_alive(int(d.name)) and not any(d.iterdir()):
+                d.rmdir()
     return {"session": name, "pipes_closed": len(panes), "pointers_removed": removed}
