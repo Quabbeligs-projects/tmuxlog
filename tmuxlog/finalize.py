@@ -59,7 +59,7 @@ def _header(bid: int, b: dict, sha_raw: str) -> bytes:
                      f"end={_iso(b['end_ns'])} ({b['end_ns']})")
     lines.append(f"sha256(raw)={sha_raw}  bytes={b['bytes_total']}")
     lines.append("----- output -----")
-    return ("\n".join(lines) + "\n").encode("utf-8", "surrogateescape"
+    return ("\n".join(lines) + "\n").encode("utf-8", "surrogateescape")
 
 def _footer(bid: int) -> bytes:
     return f"===== END BLOCK {bid} =====\n\n".encode()
@@ -70,14 +70,20 @@ def _atomic_write(path: Path, data: bytes) -> None:
     try:
         mv = memoryview(data)
         off = 0
-        while off < len(mv):                    
-            off += os.write(fd, mv[off:])      
+        while off < len(mv):
+            off += os.write(fd, mv[off:])
         os.fsync(fd)
     finally:
         os.close(fd)
     os.replace(tmp, path)
 
 def collect_blocks(session_dir) -> dict:
+    """Gather every pane's blocks (with raw/clean bodies + metadata), sorted.
+    Shared by finalize and analyze so both see the same block objects, rather
+    than re-parsing master.clean.log (whose delimiter lines could collide with
+    command output). Returns {"blocks", "events", "gaps", "warnings"}; each block
+    carries _pane and _meta.
+    """
     session_dir = Path(session_dir)
     panes_dir = session_dir / "panes"
     blocks, events, gaps, warnings = [], [], [], []
