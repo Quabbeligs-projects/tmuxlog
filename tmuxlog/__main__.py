@@ -1,3 +1,4 @@
+import sys
 from tmuxlog.cli import main
 
-raise SystemExit(main())
+sys.exit(main())
