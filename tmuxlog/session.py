@@ -70,7 +70,7 @@ def _launcher(cfg, exec_=False):
         cmd = custom
     else:
         parts.append("PYTHONPATH=" + shlex.quote(str(PKG_ROOT)))
-        cmd = shlex.quote(sys.executable) + " -m tmuxlog"
+        cmd = shlex.quote(sys.executable) + " -P -m tmuxlog"
     if exec_:
         parts.append("exec")
     parts.append(cmd)
@@ -160,6 +160,8 @@ def start_session(name, cfg, tmux=None, boundary="osc"):
         name = _current_session(tmux)
     if not name:
         raise SystemExit("tmuxlog: no session name and not inside tmux")
+    if any(c in name for c in "/.:"):
+        raise SystemExit(f"tmuxlog: bad session name {name!r}, tmux would rename it")
     created = False
     if not tmux.has_session(name):
         tmux.new_session_detached(name)
@@ -180,9 +182,15 @@ def start_session(name, cfg, tmux=None, boundary="osc"):
             print(f"tmuxlog: couldn't set hook {hook}: {(e.stderr or '').strip()}", file=sys.stderr)
             continue
         hooks.append(hook)
+    was_created = created
+    if (sdir / "session.json").exists():
+        try:
+            was_created = was_created or json.loads((sdir / "session.json").read_text()).get("created_session", False)
+        except (OSError, ValueError):
+            pass
 
     info = {"name": name, "server_pid": server_pid, "created_ns": time.time_ns(),
-            "boundary": boundary, "hooks": hooks, "created_session": created}
+            "boundary": boundary, "hooks": hooks, "created_session": was_created}
     paths.write_private_atomic(sdir / "session.json", (json.dumps(info) + "\n").encode())
     return {"session": name, "dir": str(sdir), "created": created, "boundary": boundary, "panes": results}
 
