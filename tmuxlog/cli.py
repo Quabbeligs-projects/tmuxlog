@@ -20,6 +20,8 @@ def _pane_dirs(session):
 def _resolve_session(cfg, name):
     root = Path(cfg["paths"]["root"])
     if name:
+        if any(c in name for c in "/.:"):
+            raise SystemExit(f"tmuxlog: bad session name {name!r}")
         return paths.session_dir(root, name)
     sdir = root / "sessions"
     found = []
@@ -87,7 +89,10 @@ def cmd_events(args, cfg):
     rec = Path(args.target)
     if rec.is_dir():
         rec = rec / "hooks.rec"
-    events, warnings = journal.events_from_file(rec)
+    try:
+        events, warnings = journal.events_from_file(rec)
+    except FileNotFoundError:
+        raise SystemExit(f"tmuxlog: no hooks.rec at {rec}")
     warn_all(warnings)
     if args.output == "-":
         journal.write_jsonl(iter(events), sys.stdout)
@@ -262,8 +267,6 @@ def cmd_analyze(args, cfg):
 
 
 def cmd_export(args, cfg):
-    if args.format != "jsonl":
-        raise SystemExit(f"tmuxlog: export --format {args.format} is not implemented yet")
     events, warnings = session_events(_resolve_session(cfg, args.session))
     warn_all(warnings)
     journal.write_jsonl(iter(events), sys.stdout)
@@ -340,7 +343,7 @@ def build_parser():
     s.add_argument("--include-raw", action="store_true", help="append the blocks after the analysis")
 
     s = sub.add_parser("export", help="export session data")
-    s.add_argument("--format", required=True, choices=["raw", "jsonl", "ollama"])
+    s.add_argument("--format", required=True, choices=["jsonl"])
     s.add_argument("--session", help="session name (default: most recently modified)")
     return p
 
@@ -349,4 +352,11 @@ def main(argv=None):
     os.umask(0o077)
     args = build_parser().parse_args(argv)
     cfg = config.load(Path(args.config) if args.config else None)
-    return run_command(args, cfg)
+    try:
+        return run_command(args, cfg)
+    except FileNotFoundError as e:
+        if e.filename != "tmux":
+            raise
+        raise SystemExit("tmuxlog: tmux not found, is it installed and on PATH?")
+    except subprocess.CalledProcessError as e:
+        raise SystemExit(f"tmuxlog: tmux {' '.join(e.cmd[1:])} failed: {(e.stderr or '').strip()}")
