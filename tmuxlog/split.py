@@ -13,7 +13,6 @@ SENT_CLOSE = b"@@"
 BEL = 0x07
 ESC = 0x1B
 
-# mark scanning
 def _mk(payload: bytes, start: int, end: int) -> dict:
     f = payload.split(b";")
     return {
@@ -24,8 +23,8 @@ def _mk(payload: bytes, start: int, end: int) -> dict:
         "exit": f[3].decode("ascii", "replace") if len(f) > 3 else None,
     }
 
-
 def _osc_payload_end(raw: bytes, ps: int):
+    """Payload bytes and end offset of an OSC mark starting its payload at ps."""
     k = ps
     while k < len(raw):
         if raw[k] == BEL:
@@ -35,8 +34,8 @@ def _osc_payload_end(raw: bytes, ps: int):
         k += 1
     return None, None
 
-
 def _consume_csi(raw: bytes, i: int, final: int) -> int:
+    """If raw[i:] is a CSI ending in byte `final`, return the offset past it, else i."""
     if raw[i:i + 2] != b"\x1b[":
         return i
     k = i + 2
@@ -53,17 +52,17 @@ def _scan_marks(raw: bytes) -> tuple[list[dict], int]:
         s = raw.find(SENT_PREFIX, i)
         if o == -1 and s == -1:
             break
-        if s == -1 or (o != -1 and o < s):           # OSC comes first
+        if s == -1 or (o != -1 and o < s):
             payload, end = _osc_payload_end(raw, o + len(OSC_PREFIX))
-            if end is None:                           # unterminated at EOF
+            if end is None:
                 unterminated += 1
                 break
             marks.append(_mk(payload, o, end))
             i = end
-        else:                                         # sentinel comes first
+        else:
             ps = s + len(SENT_PREFIX)
             close = raw.find(SENT_CLOSE, ps)
-            if close == -1:                           # unterminated at EOF
+            if close == -1:
                 unterminated += 1
                 break
             end = close + len(SENT_CLOSE)
@@ -73,7 +72,6 @@ def _scan_marks(raw: bytes) -> tuple[list[dict], int]:
             i = end
     return marks, unterminated
 
-# helpers
 def _norm(data: bytes) -> str:
     """ANSI-stripped, CR-removed, end-trimmed text for echo comparison."""
     s = ansi.strip(data).decode("utf-8", "surrogateescape")
@@ -86,6 +84,8 @@ def _echo_matches(region: bytes, cmd: str | None) -> bool:
     return bool(nc) and _norm(region) == nc
 
 class _Clock:
+    """Map a raw.bin offset to the arrival time of the read that delivered it."""
+
     def __init__(self, arrivals: list[tuple[int, int]]):
         arrivals = sorted(arrivals, key=lambda a: a[1])
         self._offs = [off for _, off in arrivals]
@@ -96,9 +96,9 @@ class _Clock:
             return None
         i = bisect.bisect_right(self._offs, offset) - 1
         return self._ts[i] if i >= 0 else self._ts[0]
-        
-# main
+
 def split(pane_dir, sealed: bool | None = None) -> dict:
+    """Return {"blocks": [...], "warnings": [...]} for one pane directory."""
     d = Path(pane_dir)
     raw = (d / "raw.bin").read_bytes() if (d / "raw.bin").exists() else b""
     hooks = (d / "hooks.rec").read_bytes() if (d / "hooks.rec").exists() else b""
@@ -154,13 +154,12 @@ def split(pane_dir, sealed: bool | None = None) -> dict:
             "shell_version": info.get("shell_version"),
         }
 
-    # preamble
     first = marks[0]["start"] if marks else len(raw)
     pre = region_block("preamble", 0, first)
     if pre:
         blocks.append(pre)
 
-    echo = {}  # (nonce, seq) -> "matched" | "kept"
+    echo = {}
     for idx, m in enumerate(marks):
         nxt = marks[idx + 1] if idx + 1 < len(marks) else None
         a = m["end"]
@@ -214,6 +213,7 @@ def split(pane_dir, sealed: bool | None = None) -> dict:
             blk = region_block("orphan", a, b)
             if blk:
                 blocks.append(blk)
+
     return {"blocks": blocks, "warnings": warnings}
 
 def sealed_summary(pane_dir) -> dict | None:
