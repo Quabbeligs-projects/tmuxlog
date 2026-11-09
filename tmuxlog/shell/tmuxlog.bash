@@ -172,6 +172,7 @@ __tl_debug() {
 
 __tl_precmd() {
   __tl_ec=$?
+  __tl_at_prompt=0
   local LC_ALL=C
   if (( __tl_open )); then
     __tl_open=0
@@ -193,17 +194,25 @@ __tl_arm() {
   return $__tl_ec
 }
 
-if [[ ${PROMPT_COMMAND@a} == *a* ]]; then
-  PROMPT_COMMAND=(__tl_precmd "${PROMPT_COMMAND[@]}" __tl_arm)
-else
-  PROMPT_COMMAND=$'__tl_precmd\n'"${PROMPT_COMMAND-}"$'\n__tl_arm'
-fi
+__tl_trap_done=
 
-__tl_old_trap=$(trap -p DEBUG)
-if [[ -z $__tl_old_trap ]]; then
-  trap __tl_debug DEBUG
+__tl_install_trap() {
+  local old=$1
+  __tl_trap_done=1
+  if [[ -z $old ]]; then
+    trap __tl_debug DEBUG
+    return 0
+  fi
+  [[ $old == *__tl_debug* ]] && return 0
+  eval "local -a parts=($old)"
+  trap "__tl_debug; ${parts[2]}" DEBUG
+}
+
+__tl_trap_line='[[ -n $__tl_trap_done ]] || __tl_install_trap "$(trap -p DEBUG)"'
+
+if [[ ${PROMPT_COMMAND@a} == *a* ]]; then
+  PROMPT_COMMAND=(__tl_precmd "${PROMPT_COMMAND[@]}" "$__tl_trap_line" __tl_arm)
 else
-  eval "__tl_old_trap=(${__tl_old_trap})"
-  trap "__tl_debug; ${__tl_old_trap[2]}" DEBUG
+  PROMPT_COMMAND=$'__tl_precmd\n'"${PROMPT_COMMAND-}"$'\n'"$__tl_trap_line"$'\n__tl_arm'
 fi
-unset __tl_old_trap
+unset __tl_trap_line
