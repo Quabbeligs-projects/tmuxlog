@@ -1,277 +1,214 @@
-from __future__ import annotations
-
 import json
 import sys
 from pathlib import Path
-from typing import Iterator
+
 
 class _Torn(Exception):
-    """Ran off the end of the buffer mid-record, expected on crash recovery."""
+    pass
 
 class _Corrupt(Exception):
-    """Structurally invalid record, but there is more data after it."""
+    pass
 
-def _token(buf: bytes, i: int) -> tuple[bytes, int]:
-    """Read a space-delimited token at offset ``i``; return (token, next_offset)."""
+
+def _token(buf, i):
     sp = buf.find(b" ", i)
-    if sp == -1:
+    if sp < 0:
         raise _Torn("eof reading token")
     return buf[i:sp], sp + 1
 
-def _peek_is_lenfield(buf: bytes, i: int) -> bool:
-    """True if the next field at ``i`` is a ``<digits>:`` length prefix.
-    A length prefix has its colon before the next space and only digits ahead of
-    it. Anything else (a space before the colon, or non-digits) is a bare token.
-    """
-    sp = buf.find(b" ", i)
-    co = buf.find(b":", i)
-    if co == -1:
-        return False
-    if sp != -1 and sp < co:
-        return False
-    return buf[i:co].isdigit()
 
-def _lenfield(buf: bytes, i: int, last: bool) -> tuple[bytes, int]:
-    """Read one ``<len>:<value>`` field. ``last`` fields end in \\n, others a space."""
+def _is_lenfield(buf, i):
+    colon = buf.find(b":", i)
+    if colon == -1:
+        return False
+    space = buf.find(b" ", i)
+    if space != -1 and space < colon:
+        return False
+    return buf[i:colon].isdigit()
+
+
+def _lenfield(buf, i, last):
     colon = buf.find(b":", i)
     if colon == -1:
         raise _Torn("eof reading length prefix")
-    raw_len = buf[i:colon]
-    if not raw_len.isdigit():
-        raise _Corrupt(f"bad length prefix {raw_len!r}")
-    length = int(raw_len)
-    vstart = colon + 1
-    vend = vstart + length
-    if vend > len(buf):
+    ln = buf[i:colon]
+    if not ln.isdigit():
+        raise _Corrupt(f"bad length prefix {ln!r}")
+    start = colon + 1
+    end = start + int(ln)
+    if end > len(buf):
         raise _Torn("eof reading value")
-    value = buf[vstart:vend]
-    sep = buf[vend:vend + 1]
-    expected = b"\n" if last else b" "
-    if sep != expected:
-        if sep == b"":
+    sep = buf[end:end+1]
+    want = b"\n" if last else b" "
+    if sep != want:
+        if not sep:
             raise _Torn("eof reading field separator")
-        raise _Corrupt(f"expected {expected!r} after length field, got {sep!r}")
-    return value, vend + 1
+        raise _Corrupt(f"expected {want!r} after length field, got {sep!r}")
+    return buf[start:end], end + 1
 
-def _text(b: bytes) -> str:
-    """Decode a byte field, preserving exotic bytes via surrogateescape."""
+
+def txt(b):
     return b.decode("utf-8", "surrogateescape")
 
-def _parse_I(buf: bytes, i: int) -> tuple[dict, int]:
+
+def _line_fields(buf, i, kind):
     nl = buf.find(b"\n", i)
     if nl == -1:
-        raise _Torn("eof reading I record")
-    parts = buf[i:nl].split(b" ")
-    got = len(parts) - 1
-    if got < 4 or got > 6:
-        raise _Corrupt(f"I record has {got} fields, want 4-6")
-    rec = {
-        "type": "I",
-        "nonce": _text(parts[1]),
-        "ts_ns": _text(parts[2]),
-        "pid": _text(parts[3]),
-        "shell": _text(parts[4]),
-    }
-    if got >= 5:
-        rec["shell_version"] = _text(parts[5])
-    if got >= 6:
-        rec["shlvl"] = _text(parts[6])
-    return rec, nl + 1
+        raise _Torn(f"eof reading {kind} record")
+    return [txt(x) for x in buf[i:nl].split(b" ")[1:]], nl + 1
 
-def _parse_E(buf: bytes, i: int) -> tuple[dict, int]:
-    nl = buf.find(b"\n", i)
-    if nl == -1:
-        raise _Torn("eof reading E record")
-    parts = buf[i:nl].split(b" ")
-    if len(parts) - 1 != 4:
-        raise _Corrupt(f"E record has {len(parts) - 1} fields, want 4")
-    return {
-        "type": "E",
-        "seq": _text(parts[1]),
-        "ts_ns": _text(parts[2]),
-        "nonce": _text(parts[3]),
-        "exit": _text(parts[4]),
-    }, nl + 1
 
-def _parse_S(buf: bytes, i: int) -> tuple[dict, int]:
+def _parse_I(buf, i):
+    f, nxt = _line_fields(buf, i, "I")
+    if not 4 <= len(f) <= 6:
+        raise _Corrupt(f"I record has {len(f)} fields, want 4-6")
+    rec = {"type": "I", "nonce": f[0], "ts_ns": f[1], "pid": f[2], "shell": f[3]}
+    if len(f) > 4:
+        rec["shell_version"] = f[4]
+    if len(f) > 5:
+        rec["shlvl"] = f[5]
+    return rec, nxt
+
+
+def _parse_E(buf, i):
+    f, nxt = _line_fields(buf, i, "E")
+    if len(f) != 4:
+        raise _Corrupt(f"E record has {len(f)} fields, want 4")
+    return {"type": "E", "seq": f[0], "ts_ns": f[1], "nonce": f[2], "exit": f[3]}, nxt
+
+
+def _parse_S(buf, i):
     i += 2
     seq, i = _token(buf, i)
-    ts_ns, i = _token(buf, i)
+    ts, i = _token(buf, i)
     nonce, i = _token(buf, i)
     shlvl, i = _token(buf, i)
     src = None
-    if not _peek_is_lenfield(buf, i):
-        src_b, i = _token(buf, i)
-        src = _text(src_b)
-    cmd, i = _lenfield(buf, i, last=False)
-    cwd, i = _lenfield(buf, i, last=False)
-    user, i = _lenfield(buf, i, last=False)
-    host, i = _lenfield(buf, i, last=True)
-    rec = {
-        "type": "S",
-        "seq": _text(seq),
-        "ts_ns": _text(ts_ns),
-        "nonce": _text(nonce),
-        "shlvl": _text(shlvl),
-        "src": src,
-        "cmd": _text(cmd),
-        "cwd": _text(cwd),
-        "user": _text(user),
-        "host": _text(host),
-    }
-    return rec, i
-
-def _parse_T(buf: bytes, i: int) -> tuple[dict, int]:
-    i += 2
-    seq, i = _token(buf, i)
-    ts_ns, i = _token(buf, i)
-    nonce, i = _token(buf, i)
-    part, i = _token(buf, i)
-    cmd, i = _lenfield(buf, i, last=True)
+    if not _is_lenfield(buf, i):
+        s, i = _token(buf, i)
+        src = txt(s)
+    cmd, i = _lenfield(buf, i, False)
+    cwd, i = _lenfield(buf, i, False)
+    user, i = _lenfield(buf, i, False)
+    host, i = _lenfield(buf, i, True)
     return {
-        "type": "T",
-        "seq": _text(seq),
-        "ts_ns": _text(ts_ns),
-        "nonce": _text(nonce),
-        "part": _text(part),
-        "cmd": _text(cmd),
+        "type": "S",
+        "seq": txt(seq), "ts_ns": txt(ts), "nonce": txt(nonce), "shlvl": txt(shlvl),
+        "src": src,
+        "cmd": txt(cmd), "cwd": txt(cwd), "user": txt(user), "host": txt(host),
     }, i
 
-def _parse_one(buf: bytes, i: int) -> tuple[dict, int]:
-    t = buf[i:i + 1]
-    if t == b"S":
-        if buf[i:i + 2] != b"S ":
+
+def _parse_T(buf, i):
+    i += 2
+    seq, i = _token(buf, i)
+    ts, i = _token(buf, i)
+    nonce, i = _token(buf, i)
+    part, i = _token(buf, i)
+    cmd, i = _lenfield(buf, i, True)
+    return {"type": "T", "seq": txt(seq), "ts_ns": txt(ts), "nonce": txt(nonce),
+            "part": txt(part), "cmd": txt(cmd)}, i
+
+
+def _parse_one(buf, i):
+    t = buf[i:i+1]
+    if t == b"S" or t == b"T":
+        if buf[i+1:i+2] != b" ":
             raise _Torn("eof after type char")
-        return _parse_S(buf, i)
-    if t == b"T":
-        if buf[i:i + 2] != b"T ":
-            raise _Torn("eof after type char")
+        if t == b"S":
+            return _parse_S(buf, i)
         return _parse_T(buf, i)
-    if t == b"E":
+    elif t == b"E":
         return _parse_E(buf, i)
-    if t == b"I":
+    elif t == b"I":
         return _parse_I(buf, i)
     raise _Corrupt(f"unknown record type {t!r}")
 
-def parse(buf: bytes) -> tuple[list[dict], list[dict]]:
-    """Parse a whole ``hooks.rec`` buffer.
-    Returns ``(records, warnings)``. ``records`` is the list of I/S/T/E dicts in
-    file order; ``warnings`` lists any torn/corrupt spans with byte offsets, so
-    the manifest can record them (§9).
-    """
-    records: list[dict] = []
-    warnings: list[dict] = []
-    i, n = 0, len(buf)
+
+def parse(buf):
+    records = []
+    warnings = []
+    i = 0
+    n = len(buf)
     while i < n:
         start = i
         try:
             rec, i = _parse_one(buf, i)
         except _Torn as e:
-            warnings.append({"warning": "torn_record", "offset": start,
-                             "bytes": n - start, "detail": str(e)})
+            warnings.append({"warning": "torn_record", "offset": start, "bytes": n - start, "detail": str(e)})
             break
         except _Corrupt as e:
             nl = buf.find(b"\n", i)
             if nl == -1:
-                warnings.append({"warning": "corrupt_record", "offset": start,
-                                 "bytes": n - start, "detail": str(e)})
+                warnings.append({"warning": "corrupt_record", "offset": start, "bytes": n - start, "detail": str(e)})
                 break
-            warnings.append({"warning": "corrupt_record", "offset": start,
-                             "bytes": nl + 1 - start, "detail": str(e)})
+            warnings.append({"warning": "corrupt_record", "offset": start, "bytes": nl + 1 - start, "detail": str(e)})
             i = nl + 1
             continue
         records.append(rec)
     return records, warnings
 
-def _int(s: str) -> int:
-    return int(s)
 
-def _safe(s: str) -> str:
-    """Make a surrogateescape string safe to JSON-encode with ensure_ascii=False.
-    Authoritative bytes always live in hooks.rec (hashed in the manifest); the
-    rare non-UTF-8 byte becomes U+FFFD here so events.jsonl stays valid JSON.
-    """
+def _safe(s):
     return s.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
-def to_events(records: list[dict]) -> Iterator[dict]:
-    """Translate parsed records into events.jsonl event dicts, in file order."""
+
+def to_events(records):
     for r in records:
         t = r["type"]
         if t == "I":
-            ev = {
-                "event": "init",
-                "nonce": r["nonce"],
-                "ts_ns": _int(r["ts_ns"]),
-                "pid": _int(r["pid"]),
-                "shell": r["shell"],
-            }
+            ev = {"event": "init", "nonce": r["nonce"], "ts_ns": int(r["ts_ns"]),
+                  "pid": int(r["pid"]), "shell": r["shell"]}
             if "shell_version" in r:
                 ev["shell_version"] = r["shell_version"]
             if "shlvl" in r:
-                ev["shlvl"] = _int(r["shlvl"])
+                ev["shlvl"] = int(r["shlvl"])
             yield ev
         elif t == "S":
-            ev = {
-                "event": "cmd_start",
-                "seq": _int(r["seq"]),
-                "ts_ns": _int(r["ts_ns"]),
-                "nonce": r["nonce"],
-                "depth": _int(r["shlvl"]),
-                "cmd": _safe(r["cmd"]),
-                "cwd": _safe(r["cwd"]),
-                "user": _safe(r["user"]),
-                "host": _safe(r["host"]),
-            }
+            ev = {"event": "cmd_start", "seq": int(r["seq"]), "ts_ns": int(r["ts_ns"]),
+                  "nonce": r["nonce"], "depth": int(r["shlvl"])}
+            for k in ("cmd", "cwd", "user", "host"):
+                ev[k] = _safe(r[k])
             if r.get("src") is not None:
                 ev["src"] = r["src"]
             yield ev
         elif t == "T":
-            yield {
-                "event": "cmd_part",
-                "seq": _int(r["seq"]),
-                "ts_ns": _int(r["ts_ns"]),
-                "nonce": r["nonce"],
-                "part": _int(r["part"]),
-                "cmd": _safe(r["cmd"]),
-            }
+            yield {"event": "cmd_part", "seq": int(r["seq"]), "ts_ns": int(r["ts_ns"]),
+                   "nonce": r["nonce"], "part": int(r["part"]), "cmd": _safe(r["cmd"])}
         elif t == "E":
-            yield {
-                "event": "cmd_end",
-                "seq": _int(r["seq"]),
-                "ts_ns": _int(r["ts_ns"]),
-                "nonce": r["nonce"],
-                "exit": _int(r["exit"]),
-            }
+            yield {"event": "cmd_end", "seq": int(r["seq"]), "ts_ns": int(r["ts_ns"]),
+                   "nonce": r["nonce"], "exit": int(r["exit"])}
 
-def events_from_file(path: str | Path) -> tuple[list[dict], list[dict]]:
-    """Read a hooks.rec file and return (events, warnings)."""
-    buf = Path(path).read_bytes()
-    records, warnings = parse(buf)
+
+def events_from_file(path):
+    records, warnings = parse(Path(path).read_bytes())
     return list(to_events(records)), warnings
 
-def write_jsonl(events: Iterator[dict], out) -> None:
+
+def write_jsonl(events, out):
     for ev in events:
-        out.write(json.dumps(ev, ensure_ascii=False, sort_keys=False))
+        out.write(json.dumps(ev, ensure_ascii=False))
         out.write("\n")
 
-def _selftest() -> int:
-    new = (
-        b"I abc123 1700000000000000000 4242 bash 5.2.15 1\n"
-        b"S 1 1700000000111111000 abc123 1 bc "
-        b"32:cat <<EOF\nline: with: colons\nEOF 5:/root 4:root 3:kal\n"
-        b"T 1 1700000000111222000 abc123 1 3:cat\n"
-        b"E 1 1700000000222222000 abc123 0\n"
-        b"S 2 1700000000333333000 abc123 1 10: nmap -sV  5:/root 4:root 3:kal\n"
-        b"E 2 1700000000444444000 abc123 0\n"
-    )
-    torn = b"S 3 1700000000555555000 abc123 1 bc 99:too short"
-    records, warnings = parse(new + torn)
+
+TEST_DATA = (
+    b"I abc123 1700000000000000000 4242 bash 5.2.15 1\n"
+    b"S 1 1700000000111111000 abc123 1 bc "
+    b"32:cat <<EOF\nline: with: colons\nEOF 5:/root 4:root 3:kal\n"
+    b"T 1 1700000000111222000 abc123 1 3:cat\n"
+    b"E 1 1700000000222222000 abc123 0\n"
+    b"S 2 1700000000333333000 abc123 1 10: nmap -sV  5:/root 4:root 3:kal\n"
+    b"E 2 1700000000444444000 abc123 0\n"
+)
+
+
+def selftest():
+    records, warnings = parse(TEST_DATA + b"S 3 1700000000555555000 abc123 1 bc 99:too short")
     assert len(records) == 6, [r["type"] for r in records]
     assert warnings and warnings[0]["warning"] == "torn_record", warnings
     evs = list(to_events(records))
     kinds = [e["event"] for e in evs]
-    assert kinds == ["init", "cmd_start", "cmd_part", "cmd_end",
-                     "cmd_start", "cmd_end"], kinds
+    assert kinds == ["init", "cmd_start", "cmd_part", "cmd_end", "cmd_start", "cmd_end"], kinds
     assert evs[0]["shell_version"] == "5.2.15" and evs[0]["shlvl"] == 1
     assert evs[1]["src"] == "bc"
     assert evs[1]["cmd"] == "cat <<EOF\nline: with: colons\nEOF"
@@ -281,18 +218,20 @@ def _selftest() -> int:
     print("selftest OK:", len(records), "records,", len(warnings), "warning(s)")
     return 0
 
-def main(argv: list[str]) -> int:
+
+def main(argv):
     if not argv or argv[0] in ("-h", "--help"):
-        print("usage: python -m tmuxlog.journal <hooks.rec>   # emit JSONL to stdout\n"
+        print("usage: python -m tmuxlog.journal <hooks.rec>    (jsonl goes to stdout)\n"
               "       python -m tmuxlog.journal --selftest", file=sys.stderr)
         return 0 if argv else 2
     if argv[0] == "--selftest":
-        return _selftest()
+        return selftest()
     events, warnings = events_from_file(argv[0])
     write_jsonl(iter(events), sys.stdout)
     for w in warnings:
         print("warning:", json.dumps(w), file=sys.stderr)
     return 0
 
+
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    sys.exit(main(sys.argv[1:]))
