@@ -39,6 +39,7 @@ def _open_commands(events: list[dict]) -> list[dict]:
     return list(started.values())
 
 def session_events(session: Path) -> tuple[list[dict], list[dict]]:
+    """All panes' events, each tagged with its pane, ordered by ts_ns then pane."""
     events, warnings = [], []
     for pane in _pane_dirs(session):
         evs, warns = journal.events_from_file(pane / "hooks.rec")
@@ -52,6 +53,7 @@ def cmd_init_script(args, cfg) -> int:
     return 0
 
 def cmd_events(args, cfg) -> int:
+    """Write a pane's events.jsonl next to its hooks.rec (or to stdout with -o -)."""
     rec = _resolve_hooks_rec(Path(args.target))
     events, warnings = journal.events_from_file(rec)
     for w in warnings:
@@ -67,6 +69,7 @@ def cmd_events(args, cfg) -> int:
     return 0
 
 def _tmux_pipes() -> tuple[int | None, dict[str, bool]]:
+    """(server pid, {pane_id: piped}) of the default tmux server, or (None, {})."""
     try:
         pid = subprocess.run(["tmux", "display-message", "-p", "#{pid}"],
                              capture_output=True, text=True, timeout=5)
@@ -135,8 +138,8 @@ def cmd_capture(args, cfg) -> int:
     from tmuxlog import capture
     return capture.run(Path(args.pane_dir))
 
-
 def _boundary_for(cfg) -> str:
+    """config `capture.boundary`, or for "auto" the probe result cached per tmux version."""
     from tmuxlog import probe
     mode = cfg["capture"].get("boundary", "auto")
     if mode in ("osc", "sentinel"):
@@ -217,9 +220,9 @@ def cmd_analyze(args, cfg) -> int:
         res = analyze.analyze(session, client, include_raw=args.include_raw,
                               collapse=bool(a["collapse_cr"]),
                               progress=lambda msg: print(f"tmuxlog: {msg}", file=sys.stderr, flush=True))
-    except ValueError as e:                   
+    except ValueError as e:
         raise SystemExit(f"tmuxlog: {e}")
-    except analyze.OllamaError as e:           
+    except analyze.OllamaError as e:
         raise SystemExit(f"tmuxlog: Ollama error: {e}")
     print(f"tmuxlog: analysis of {session.name} ({res['blocks']} block(s), {res['chunks']} chunk(s), "
           f"model {client.model}) -> {res['analysis']}")
