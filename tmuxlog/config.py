@@ -56,7 +56,7 @@ def load(path: Path | None = None) -> dict:
     if path.exists():
         with open(path, "rb") as f:
             _merge(cfg, tomllib.load(f))
-    if "ollama" in cfg:                       
+    if "ollama" in cfg:
         cfg["analyze"] = {**cfg["analyze"], **cfg.pop("ollama")}
     if "TMUXLOG_ROOT" in os.environ:
         cfg["paths"]["root"] = os.environ["TMUXLOG_ROOT"]
