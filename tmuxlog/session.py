@@ -17,6 +17,8 @@ _PANE_FMT = "\t".join("#{" + f + "}" for f in (
     "pane_index", "pane_title", "pane_tty", "pane_pipe"))
 
 class Tmux:
+    """Wrapper over tmux binary + optional socket."""
+
     def __init__(self, base=("tmux",)):
         self.base = list(base)
 
@@ -63,6 +65,15 @@ class Tmux:
 PKG_ROOT = Path(__file__).resolve().parent.parent
 
 def _launcher(cfg, exec_: bool = False) -> str:
+    """Shell command prefix that runs tmuxlog from inside tmux (pipe-pane, run-shell).
+
+    tmux runs these with the *server's* environment and cwd, so nothing may
+    depend on the caller's PYTHONPATH, cwd or TMUXLOG_ROOT. The state root is
+    pinned explicitly. By default this interpreter runs the package from where
+    it actually lives (works for bin/tmuxlog in a checkout and for an install);
+    `[capture] cmd` overrides the launcher, e.g. "/usr/local/bin/tmuxlog".
+    With exec_, the shell is replaced (env assignments must precede `exec`).
+    """
     root = shlex.quote(str(Path((cfg or {}).get("paths", {}).get("root", "~/.tmuxlog")).expanduser()))
     env = [f"TMUXLOG_ROOT={root}"]
     override = ((cfg or {}).get("capture", {}).get("cmd") or "").strip()
@@ -76,6 +87,7 @@ def _launcher(cfg, exec_: bool = False) -> str:
     return " ".join(env + (["exec"] if exec_ else []) + [cmd])
 
 def _capture_cmd(cfg) -> str:
+    """Command pipe-pane runs per pane (exec: the capture process is the pipe's child)."""
     return f"{_launcher(cfg, exec_=True)} capture"
 
 def _pid_alive(pid: int) -> bool:
@@ -88,6 +100,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 def _owns_pipe(pane_dir: Path) -> bool:
+    """True if a capture we started is still running for this pane."""
     f = pane_dir / "capture.pid"
     if not f.exists():
         return False
@@ -102,6 +115,7 @@ def _run_dir(root: Path, server_pid: int) -> Path:
 
 def arm_pane(pane: dict, session_dir: Path, root: Path, server_pid: int,
              boundary: str, tmux: Tmux, cfg=None) -> dict:
+    """Create the pane's files and start (or skip) its capture pipe. Idempotent."""
     pane_num = pane["pane_id"].lstrip("%")
     ptr = _run_dir(root, server_pid) / pane_num
 
@@ -137,9 +151,9 @@ def arm_pane(pane: dict, session_dir: Path, root: Path, server_pid: int,
     status = "armed"
     if pane["piped"]:
         if _owns_pipe(pane_dir):
-            status = "already-ours"          
+            status = "already-ours"
         else:
-            status = "foreign-pipe"         
+            status = "foreign-pipe"
     else:
         cmd = f"{_capture_cmd(cfg)} --pane-dir {shlex.quote(str(pane_dir))}"
         tmux.pipe_pane(pane["pane_id"], cmd)
@@ -179,6 +193,7 @@ def start_session(name: str | None, cfg: dict, tmux: Tmux | None = None,
             "boundary": boundary, "panes": results}
 
 def arm_new(name: str, cfg: dict, tmux: Tmux | None = None) -> dict:
+    """Arm any panes in the session that aren't armed yet (called by the hooks)."""
     tmux = tmux or Tmux()
     root = Path(cfg["paths"]["root"])
     session_dir = root / "sessions" / name
