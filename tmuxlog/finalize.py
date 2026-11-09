@@ -166,7 +166,7 @@ def finalize(session_dir, cap_bytes=CAP_DEFAULT):
         uid = b["_pane"]
         truncated = len(raw) > cap_bytes
         if truncated:
-            half = cap_bytes // 2
+            half = max(cap_bytes // 2, 1)
             lo, hi = b["raw_offsets"]
             note = (f"\n[tmuxlog: TRUNCATED, showing {2 * half} of {len(raw)} bytes; "
                     f"full block = panes/{uid}/raw.bin [{lo},{hi}) sha256={raw_sha}]\n").encode()
