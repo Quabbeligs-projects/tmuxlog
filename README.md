@@ -20,6 +20,8 @@ But I recommend just analyzing the logs on your own.
 > That is intentional, they are evidence for your private use. tmuxlog does no
 > redaction. All state is created `0700` (dirs) / `0600` (files) under
 > `~/.tmuxlog/`. Keep it off shared or synced storage.
+> 
+> tmuxlog is licensed under GPL-3.0, see [LICENSE](LICENSE).
 >
 > You're welcome to try and read my code but I have to warn you that I barely comment, the only file with understandable comments is `analyze`, because claude code made it, you're on your own for the rest, good luck trying to understand my mess...
 
