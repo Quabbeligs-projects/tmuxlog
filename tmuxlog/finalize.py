@@ -1,12 +1,47 @@
 import hashlib
 import json
 import os
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tmuxlog import ansi, capture, journal, split
+from tmuxlog import ansi, capture, config, journal, split
 
 CAP_DEFAULT = 100 * 1024 * 1024
+ORPHAN_GAP_MS = config.DEFAULTS["capture"]["orphan_gap_ms"]
+INTERACTIVE = list(config.DEFAULTS["capture"]["interactive"])
+
+SKIP = {"sudo", "doas", "exec", "command", "builtin", "env", "nohup", "time", "nice", "stdbuf"}
+
+
+def program(cmd):
+    if not cmd:
+        return None
+    try:
+        words = shlex.split(cmd, posix=True)
+    except ValueError:
+        words = cmd.split()
+    skip_next = False
+    for w in words:
+        if skip_next:
+            skip_next = False
+            continue
+        if w in ("-u", "-g", "-U", "-C", "-D", "-p"):
+            skip_next = True
+            continue
+        if w in SKIP or w.startswith("-"):
+            continue
+        name, eq, _ = w.partition("=")
+        if eq and name.isidentifier():
+            continue
+        return os.path.basename(w)
+    return None
+
+
+def is_interactive(b):
+    if b["kind"] != "command":
+        return None
+    return program(b.get("cmd")) in INTERACTIVE
 
 
 def sha(b):
@@ -90,7 +125,7 @@ def collect_blocks(session_dir):
                 meta = json.loads((pane / "meta.json").read_text())
             except (OSError, json.JSONDecodeError):
                 meta = {}
-        res = split.split(pane)
+        res = split.split(pane, gap_ms=ORPHAN_GAP_MS)
         for blk in res["blocks"]:
             blk["_pane"] = pane.name
             blk["_meta"] = meta
@@ -158,6 +193,7 @@ def finalize(session_dir, cap_bytes=CAP_DEFAULT):
             "shell": b.get("shell"),
             "depth": b.get("depth"),
             "echo_dedup": b.get("echo_dedup"),
+            "interactive": is_interactive(b),
             "raw_offsets": b["raw_offsets"],
             "bytes_total": b["bytes_total"],
             "truncated": truncated,
