@@ -22,7 +22,8 @@ But I recommend just analyzing the logs on your own.
 > `~/.tmuxlog/`. Keep it off shared or synced storage.
 > 
 > tmuxlog is licensed under GPL-3.0, see [LICENSE](LICENSE).
->
+> Copyright (C) 2026 Quabbelig
+> 
 > You're welcome to try and read my code but I have to warn you that I barely comment, the only file with understandable comments is `analyze`, because claude code made it, you're on your own for the rest, good luck trying to understand my mess...
 
 ## Requirements
