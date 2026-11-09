@@ -87,7 +87,7 @@ def _echo_matches(region, cmd):
     return got == want
 
 
-def split(pane_dir, sealed=None):
+def split(pane_dir, sealed=None, gap_ms=500):
     d = Path(pane_dir)
 
     def read(name):
@@ -147,6 +147,18 @@ def split(pane_dir, sealed=None):
             "raw_offsets": [a, b], "bytes_total": b - a,
             "raw": body, "clean": ansi.strip(body),
         })
+
+    def orphans(a, b):
+        cuts = [a]
+        if gap_ms is not None and gap_ms >= 0:
+            lo = bisect.bisect_right(offs, a)
+            hi = bisect.bisect_left(offs, b)
+            for i in range(max(lo, 1), hi):
+                if stamps[i] - stamps[i-1] > gap_ms * 1_000_000:
+                    cuts.append(offs[i])
+        cuts.append(b)
+        for x, y in zip(cuts, cuts[1:]):
+            region("orphan", x, y)
 
     if marks:
         region("preamble", 0, marks[0]["start"])
@@ -212,7 +224,7 @@ def split(pane_dir, sealed=None):
             })
 
         elif m["kind"] == "D":
-            region("orphan", a, b)
+            orphans(a, b)
 
     return {"blocks": blocks, "warnings": warnings}
 
