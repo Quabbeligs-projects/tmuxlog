@@ -37,8 +37,8 @@ class Capture:
         self.idx_fd = self._open("arrivals.idx")
         self.raw_offset = os.fstat(self.raw_fd).st_size
         self.stream_offset = 0
-        self.gap = None            
-        self.pending_gaps = []     
+        self.gap = None
+        self.pending_gaps = []
         self.gaps_total = 0
         (self.dir / "capture.pid").write_text(f"{os.getpid()} {self.clock()}\n")
         os.chmod(self.dir / "capture.pid", paths.FILE_MODE)
@@ -55,10 +55,10 @@ class Capture:
             return
         self._close_gap()
         self.gap = {
-            "kind": kind,                       
+            "kind": kind,
             "stream_start": stream_start,
             "stream_end": stream_start + nbytes,
-            "raw_offset": self.raw_offset,      
+            "raw_offset": self.raw_offset,
             "bytes": nbytes,
             "first_ts_ns": ts,
             "last_ts_ns": ts,
@@ -79,7 +79,7 @@ class Capture:
             with paths.open_private(self.dir / "gaps.jsonl", "ab") as f:
                 f.write(data)
         except OSError:
-            return  
+            return
         self.pending_gaps.clear()
 
     def feed(self, data: bytes) -> None:
@@ -126,11 +126,10 @@ class Capture:
         except OSError:
             pass
 
-
 def run(pane_dir: Path, in_fd: int = 0, clock=time.time_ns) -> int:
     def on_signal(signum, frame):
         raise _Stop(signal.Signals(signum).name)
-        
+
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
