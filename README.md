@@ -2,20 +2,14 @@
 
 **TMUXLOG** is a chronological logging tool, across all panes and windows of a tmux session. This tool can help you organize yourself across multiple sessions of whatever you’re doing in tmux.
 
-I personally use this for pentesting, red teams, bug bounties, home labs, CTF’s, etc…, even though I do take notes during these activities, sometimes I do forget some stuff, or I‘m not that clear in my notes and don‘t understand what the fuck I wrote down when I look at them later on. Things tend to get really messy really quickly.
+I personally use this for pentesting, red teams, bug bounties, home labs, CTF’s, etc…, even though I do take notes during these activities, sometimes I do forget some stuff, or I‘m not that clear in my notes and don‘t understand what the fuck I wrote down when I look at them later on.
 
 So I decided to look for a tool that could log tmux sessions, but every tool I found had interweaving problems, if multiple command outputs were printing at the same time, the log would become a mess and you couldn’t read anything, so then I decided I‘ll just do it myself and it has helped me immensely. I just look at the clean logs, as they contain absolutely everything of a session.
 
 I recommend keeping your work segmented in different sessions, so for example, I make different sessions for passive enumeration, active enumeration, etc…, keeping the logs short helps a lot, if you have to find something specifically later on, or if you just want to look at a specific segments output to refresh your memory. There is no problem in having longer sessions, I just recommend to actually segment your work, for quality of life, as going through one giant log can be hell.
 
-There is an `analyze` feature, which you can setup, if you want, where a local model can analyze your clean log for you and give you a session report.
-
-This feature is purely experimental and I would not trust it, especially if you don‘t have a good GPU, as it gets really bad with small context windows and small models. I myself do not use this feature, I just look at my clean logs myself and analyze them on my own, as my activities are too complex for this small of a context window and model. When I tried using it a few times, it did get some stuff right, but it also misinterpreted a lot of stuff, got confused, concentrated on insignificant stuff or just spat straight up bs.
-
-Also I only have basic knowledge, when it comes to ML, etc…, so I had to use claude code for this feature, so the way this feature is setup is probably also not helping at all, but in general, I do not recommend using it, if you really need a model to analyze your logs, you‘d be better off asking one of the big models to analyze your clean logs, but I have to warn you that the clean log contains the direct input and output of your commands, there is absolutely no sanitisation being done, so you have to be careful to not misshandle potential sensitive data in those logs.
-
-But I recommend just analyzing the logs on your own.
-
+There is an `analyze` feature, which you can setup, if you want, where a local model can analyze your clean log for you and give you a session report, more on this feature below.
+d
 > **The logs contain everything verbatim**: credentials, keys, tokens, hashes.
 > That is intentional, they are evidence for your private use. tmuxlog does no
 > redaction. All state is created `0700` (dirs) / `0600` (files) under
@@ -126,13 +120,21 @@ byte range and sha256, the per-file hashes, and any capture gaps.
 
 `prompts/` contains all the prompts for the session report.
 
-## Running Ollama on another machine (e.g. a GPU host)
+## Analyze
+
+This feature is meant to create a small report of a session, that way if you wanted to continue your work on a later date, you could just look at the small report real quick and roughly know what you did last time, that way you wouldn’t have to skim an entire log. This feature is purely experimental and I would not trust it, especially if you don‘t have a good GPU, as it gets really bad with small context windows and small models. I myself do not use this feature, I just look at my clean logs myself and analyze them on my own, as my activities are too complex for this small of a context window and model. When I tried using it a few times, it did get some stuff right, but it also misinterpreted a lot of stuff, got confused, concentrated on insignificant stuff or just spat straight up bs.
+
+I only have basic knowledge, when it comes to ML, etc…, so I had to use claude code for this feature, so the way this feature is coded and setup, probably isn’t helping either. In general, I do not recommend using it, if you really need a model to analyze your logs, you‘d be better off asking one of the big models, but once again, I have to warn you that the clean log contains the direct input and output of your commands, there is absolutely no sanitisation being done, so you have to be careful to not misshandle potential sensitive data in those logs.
+
+But I recommend just analyzing the logs on your own.
+
+### Running Ollama on another machine (e.g. a GPU host)
 
 `analyze` uses `127.0.0.1:11434` by default. If Ollama runs on another
 machine, there are two ways to reach it. Option a is easiest, it’s just direct, plain unencrypted HTTP, use it when you can trust the network. Option b is harder, using an SSH tunnel to encrypt the data, use it when the network isn't fully trusted, or you can't or won't expose Ollama on the host's LAN interface. Remember that the logs contain credentials,
 keys and hashes verbatim, and `analyze` sends the session's clean log to the model.
 
-### (a) Direct
+#### (a) Direct
 
 On the GPU host:
 
@@ -159,7 +161,7 @@ Anyone can read the log, and Ollama itself
 has no authentication. Only use this on a host and network you trust, and
 firewall port 11434 on the GPU host to the capture box's address.
 
-### (b) SSH loopback tunnel
+#### (b) SSH loopback tunnel
 
 On the GPU host, leave Ollama on its default loopback address
 (`OLLAMA_HOST` unset, or `127.0.0.1:11434`) and pull the model:
