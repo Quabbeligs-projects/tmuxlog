@@ -57,7 +57,7 @@ source "$(tmuxlog init-script)"
 The hooks stay inert until `tmuxlog start-session` arms a pane. They cost no
 forks per command and never block or alter a command.
 
-Optional: create `~/.tmuxlog`, copy the example config into it, and edit it.
+Optionally create `~/.tmuxlog`, copy the example config into it, and edit it.
 Every key is documented there and every key is optional.
 
 ```sh
@@ -71,7 +71,7 @@ cp ~/tools/tmuxlog/config.example.toml ~/.tmuxlog/config.toml
 |---|---|
 | `start-session <name>` | Arms every pane of tmux session `<name>`, creating it detached if needed; inside tmux with no name, arms the current session. Probes tmux once per version to pick the boundary mode. Installs session-scoped hooks, so new windows and splits are armed too. Idempotent. |
 | `stop-session <name>` | Removes the hooks, closes the pipes (each capture seals its pane) and disarms the shells. |
-| `status --session` | Per pane: shells, commands, open commands, pipe `alive` / `sealed` / `server gone`, raw bytes, capture gaps. |
+| `status --session <name>` | Per pane: shells, commands, open commands, pipe `alive` / `sealed` / `server gone`, raw bytes, capture gaps. |
 | `finalize --session <name>` | Writes `final/master.log`, `master.clean.log`, `events.jsonl` and `manifest.json`, ordered by command start. Safe to re-run at any time; output is replaced atomically. |
 | `analyze --session <name> --model --include-raw` | Local Ollama map/reduce over the finalized blocks, written to `analysis.md`. Every prompt is saved under `prompts/<run>/`. By default (`[analyze] collapse_cr = true`) carriage-return/backspace overwrites such as progress bars are collapsed **in the model input only**; `raw.bin` and the master logs are never altered. `--include-raw` appends the raw blocks, escapes preserved. |
 | `export --format jsonl --session <name>` | Every pane's hook events in timestamp order, on stdout. |
@@ -85,18 +85,16 @@ cp ~/tools/tmuxlog/config.example.toml ~/.tmuxlog/config.toml
 ```
 ~/.tmuxlog/sessions/<name>/
   session.json                 boundary mode, tmux server pid, hooks
-  panes/<pane uid>/            one directory per pane, append-only
-    raw.bin                    every byte the pane printed, untouched
+  panes/<pane uid>/            one directory per pane
+    raw.bin                    every byte the pane printed
     arrivals.idx               arrival time of each chunk of raw.bin
     hooks.rec                  command start/end records from the shell hooks
-    gaps.jsonl                 only if writes failed (e.g. disk full): exactly what is missing
+    gaps.jsonl                 only if writes failed (e.g. disk full), what‘s missing
     sealed, meta.json, capture.pid, boundary
   final/                       written by finalize (regenerable from panes/)
     master.log  master.clean.log  events.jsonl  manifest.json
   analysis.md  prompts/        written by analyze
 ```
-
-Everything in `final/` is a pure function of `panes/`.
 
 Block states:
 - **`complete`:** the command finished normally.
@@ -111,17 +109,18 @@ command goes into a **preamble** block.
 
 ## Output files
 
-`master.log` is the raw session log, with escape codes, etc…. Its sha256.
+`master.log` is the raw sha256 session log.
 
-`master.clean.log` is the session log as plain text.
+`master.clean.log` is the legible plain text session log.
 
-`events.jsonl` is the structured view.
+`events.jsonl` has one line per command and one record per block.
 
-`manifest.json` is the index and the integrity check, it has every block with its
-timestamps, exit code, byte range and sha256, the per-file hashes, and any
-capture gaps.
+`manifest.json` has every block with its timestamps, exit code,
+byte range and sha256, the per-file hashes, and any capture gaps.
 
-`analysis.md` only shows up if you run `analyze`, with the prompts saved in `prompts/`.
+`analysis.md` is the models session report.
+
+`prompts/` contains all the prompts for the session report.
 
 ## Running Ollama on another machine (e.g. a GPU host)
 
