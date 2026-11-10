@@ -44,7 +44,11 @@ work. If it isn't already:
 
 ```sh
 mkdir -p ~/.local/bin
-# and, if it's not on PATH yet, add this to your ~/.bashrc or ~/.zshrc:
+```
+
+If it's not on `PATH` yet, add this to your `~/.bashrc` or `~/.zshrc`:
+
+```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
